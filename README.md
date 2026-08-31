@@ -18,7 +18,7 @@ batch runs and capacity sweeps.
 
 > **PLAN and SIMULATE are not yet wired together.** PLAN's zone capacities,
 > role staffing and route durations are stored and exported, but nothing feeds
-> them into the simulation — SIMULATE runs purely off `Params.json`.
+> them into the simulation — SIMULATE runs purely off `params.json`.
 
 ---
 
@@ -53,26 +53,6 @@ have. Nothing is compiled and there is no build step.
 - PLAN's PNG export draws the floorplan into a canvas. Under `file://` the
   canvas is treated as cross-origin and the export throws.
 
-### If you are on Linux
-
-The parameter file on disk is named `Params.json` with a capital P, but both
-engines ask for `params.json`. macOS and Windows ignore case and resolve it
-anyway; Linux and most containers do not, so the simulator will fail to start.
-
-Rename it once, via a temporary name so the rename also works on
-case-insensitive filesystems:
-
-```bash
-mv Params.json tmp.json && mv tmp.json params.json
-```
-
-Or leave it alone and add an alias alongside it (Linux only — on macOS this
-errors, because the name is already taken by the same file):
-
-```bash
-ln -s Params.json params.json
-```
-
 ---
 
 ## Repository layout
@@ -86,8 +66,9 @@ ln -s Params.json params.json
 | `nuhs-shell.js` | Shared top bar, Settings, dialogs |
 | `assets/template_map.png` | Fallback floorplan used by **Skip** |
 | `assets/icons/` | Six role glyphs, white on transparent, tinted at runtime |
-| `Params.json` | Fitted parameters (see [Linux note](#if-you-are-on-linux)) |
+| `params.json` | Fitted parameters (see [Linux note](#if-you-are-on-linux)) |
 | `ed_simulation.py` | Headless SimPy engine |
+| `firebase.json`, `.firebaserc` | Firebase Hosting config |
 | `_original/` | The two pre-redesign pages, for reference |
 | `_docs/design-nuhs.md` | Brand and design guide the UI follows |
 | `_mockups/` | Design mockups the redesign was built against |
@@ -236,6 +217,49 @@ the system never reaches steady state).
 
 ---
 
+## 4. Deploying to Firebase Hosting
+
+The app is static, so Hosting serves it as-is. **You do not need the Firebase JS
+SDK** — that is only for calling Firebase services such as Analytics or Auth
+from the page, and this app calls none of them. Skip the "Add Firebase SDK" step
+in the console.
+
+Hosting publishes the repository root, with an ignore list in `firebase.json`
+keeping the Python engine, the virtualenv, the working folders and every
+dotfile out of the upload. There is no build step and nothing to copy.
+
+Preview it locally:
+
+```bash
+firebase emulators:start --only hosting
+```
+
+> The emulator does **not** apply the `ignore` list — it serves everything in
+> the public directory. Use it to check the pages, not to check what will be
+> published. To verify exclusions, deploy to a temporary channel and test that
+> instead:
+>
+> ```bash
+> firebase hosting:channel:deploy verify --expires 1h
+> curl -o /dev/null -w '%{http_code}\n' <channel-url>/.git/config   # expect 404
+> firebase hosting:channel:delete verify
+> ```
+
+Then publish:
+
+```bash
+firebase deploy --only hosting
+```
+
+The site root rewrites to PLAN; SIMULATE is at `/ed_flow_sim.html` and reachable
+from the top bar.
+
+> Firebase Hosting is case-sensitive. This is why the parameter file is
+> `params.json` in lowercase — the capital-P spelling this repository once used
+> resolves on macOS but 404s on Hosting, which stops SIMULATE from starting.
+
+---
+
 ## How the model is calibrated
 
 Every duration is a **lognormal fit to the real data**, separately per triage
@@ -288,5 +312,5 @@ move away from them to explore scenarios.
 
 `Overall_Flow.pdf` (the process map), `ED_Dataset.xlsx` (the source data) and
 `fit_params.py` (the fitting script) are all referenced in the code and comments
-but are not in this repository. Without the fitting script, `Params.json` cannot
+but are not in this repository. Without the fitting script, `params.json` cannot
 be regenerated from a newer export.

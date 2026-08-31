@@ -1,0 +1,45 @@
+{
+  "hosting": {
+    "public": ".",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/.*/**",
+      "**/node_modules/**",
+      "_docs/**",
+      "_mockups/**",
+      "_original/**",
+      "flowSimEnv/**",
+      "public/**",
+      "**/*.py",
+      "**/*.md",
+      "**/*.log"
+    ],
+    "rewrites": [
+      {
+        "source": "/",
+        "destination": "/ed_flow_annotator.html"
+      }
+    ],
+    "headers": [
+      {
+        "source": "**/*.@(html|json)",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "**/*.@(js|css|png)",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=3600"
+          }
+        ]
+      }
+    ]
+  }
+}

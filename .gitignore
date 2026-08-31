@@ -9,6 +9,11 @@ flowSimEnv/
 __pycache__/
 *.pyc
 
+# Firebase
+firebase-debug.log
+*-debug.log
+.firebase/
+
 # Working material, not part of the product
 _docs/
 _mockups/

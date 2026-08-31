@@ -69,6 +69,7 @@
 .drawbar[hidden]{display:none}
 .drawbar .title{
   font:700 11px/1 var(--ui); letter-spacing:.1em; text-transform:uppercase; color:var(--text);
+  white-space:nowrap; flex:none;
 }
 .drawbar .opt{
   display:flex; align-items:center; gap:7px; height:32px; padding:0 12px;
@@ -345,6 +346,7 @@
             <span class="title" id="draw-title">Add Zone</span>
             <button class="opt" id="draw-a" type="button"></button>
             <button class="opt" id="draw-b" type="button"></button>
+            <button class="opt" id="draw-fin" type="button"></button>
             <button class="opt cancel" id="draw-x" type="button" title="Cancel">&times;</button>
           </div>
           <p class="steps" id="draw-steps" hidden></p>

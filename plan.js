@@ -40,6 +40,10 @@
     { name:"Ward Lift",       x:880, y:520, w:260, h:180, color:C.silver, capacity:8 }
   ];
 
+  var FINISH_LABEL =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" ' +
+    'stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5.5 5.5L20 7"/></svg> Finish';
+
   var LS_KEY = "nuhs-ed-plan-v1";
 
   /* ---------- state ---------- */
@@ -568,7 +572,7 @@
     }
     if(draft){
       if(draft.kind === "zone-rect"){ draft.a = w; draft.b = w; draft.dragging = true; }
-      else if(draft.kind === "zone-poly"){ draft.pts.push(w); }
+      else if(draft.kind === "zone-poly"){ draft.pts.push(w); updateDrawbar(); }
       else if(draft.kind === "node"){ finishNode(w); }
       else if(draft.kind === "scale"){
         if(!draft.a) draft.a = w;
@@ -847,6 +851,7 @@
     if(draft.stops.length === 0){
       // the first click only establishes where the route starts
       draft.stops.push({ targetType:t.targetType, targetId:t.targetId, waitMin:0 });
+      updateDrawbar();
       requestRender();
       return;
     }
@@ -866,7 +871,7 @@
           draft.stops.push({ targetType:t.targetType, targetId:t.targetId, waitMin:m });
           var finishNow = pendingSection && pendingSection.finishAfter;
           pendingSection = null;
-          p.remove(); requestRender();
+          p.remove(); updateDrawbar(); requestRender();
           if(finishNow && draft.stops.length >= 2) finishRoute();
         }
         p.querySelector("#sd-ok").addEventListener("click", ok);
@@ -917,7 +922,7 @@
         p.querySelector("#rt-back").addEventListener("click", function(){
           p.remove();
           draft = { kind:"route", stops:stops, color:css("--nuhs-cyan") };
-          showDrawbar("route"); requestRender();
+          showDrawbar("route"); updateDrawbar(); requestRender();
         });
         lab.focus(); lab.select();
       }
@@ -971,10 +976,13 @@
 
   /* ---------- drawbar ---------- */
   function showDrawbar(kind, shape){
-    var bar = $("#drawbar"), a = $("#draw-a"), b = $("#draw-b"), steps = $("#draw-steps");
+    var bar = $("#drawbar"), a = $("#draw-a"), b = $("#draw-b"),
+        fin = $("#draw-fin"), steps = $("#draw-steps");
     bar.hidden = false;
     bar.classList.remove("stack");
     steps.hidden = true;
+    fin.hidden = true;
+    fin.innerHTML = FINISH_LABEL;
     if(kind === "zone"){
       $("#draw-title").textContent = "Add Zone";
       a.hidden = false; b.hidden = false;
@@ -987,6 +995,14 @@
       b.classList.toggle("active", shape === "poly");
       a.onclick = function(){ startZone("rect"); };
       b.onclick = function(){ startZone("poly"); };
+      // a rectangle finishes on mouse-up, so Finish only applies to polygons
+      if(shape === "poly"){
+        fin.hidden = false;
+        fin.onclick = function(){
+          if(draft && draft.pts.length >= 3) finishZone(draft.pts.slice(), "poly");
+        };
+      }
+      updateDrawbar();
     }
     else if(kind === "node"){
       $("#draw-title").textContent = "Add Node";
@@ -1000,12 +1016,29 @@
       steps.innerHTML =
         '1. Click on node to start<br>' +
         '2. Click to add next destination<br>' +
-        '3. Double click to finish';
+        '3. Double click or click button to finish';
+      fin.hidden = false;
+      fin.onclick = function(){
+        if(draft && draft.stops.length >= 2) finishRoute();
+      };
+      updateDrawbar();
     }
     else if(kind === "scale"){
       $("#draw-title").textContent = "Set Scale";
       a.hidden = true; b.hidden = true;
     }
+  }
+
+  /* Finish enables once the shape is completable: 2 nodes for a route,
+     3 points for a polygon. Double-click stays available at the same threshold. */
+  function updateDrawbar(){
+    var fin = $("#draw-fin");
+    if(!draft || fin.hidden) return;
+    var ready = draft.kind === "route"     ? draft.stops.length >= 2
+              : draft.kind === "zone-poly" ? draft.pts.length >= 3
+              : false;
+    fin.disabled = !ready;
+    fin.classList.toggle("active", ready);
   }
 
   function hideDrawbar(){ $("#drawbar").hidden = true; }

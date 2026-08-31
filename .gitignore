@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# Local tooling
+.claude/
+
+# Python virtualenv — create your own; see README
+flowSimEnv/
+__pycache__/
+*.pyc
+
+# Working material, not part of the product
+_docs/
+_mockups/
+_original/

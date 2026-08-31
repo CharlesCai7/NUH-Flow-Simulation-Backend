@@ -1,438 +1,268 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>ED Flow Simulator</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Emergency Department Simulator — Simulate</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="nuhs.css">
 <style>
-  :root{
-    --bg:#f2f5f6;
-    --surface:#ffffff;
-    --surface-2:#e7edef;
-    --ink:#132435;
-    --ink-dim:#546879;
-    --line:#d3dee2;
-    --accent:#1d7373;
-    --accent-ink:#0e4a4a;
-    --accent-soft:#dbecea;
-    --p1:#d64545;
-    --p1-soft:#fbe1e1;
-    --p2:#dd8a1f;
-    --p2-soft:#faecd6;
-    --p3:#2e9b62;
-    --p3-soft:#dcf0e5;
-    --slate:#5b7183;
-    --focus:#1d7373;
-    --shadow: 0 1px 2px rgba(19,36,53,0.06), 0 6px 20px rgba(19,36,53,0.06);
-  }
-  @media (prefers-color-scheme: dark){
-    :root:not([data-theme="light"]){
-      --bg:#0b1420;
-      --surface:#101d2b;
-      --surface-2:#152435;
-      --ink:#e7edf1;
-      --ink-dim:#93a7b6;
-      --line:#213244;
-      --accent:#3fa9a0;
-      --accent-ink:#bfe9e3;
-      --accent-soft:#12302f;
-      --p1:#e5716c;
-      --p1-soft:#3a1a1c;
-      --p2:#e4a24e;
-      --p2-soft:#3a2c14;
-      --p3:#57bd88;
-      --p3-soft:#123a26;
-      --slate:#8ea3b3;
-      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 10px 30px rgba(0,0,0,0.35);
-    }
-  }
-  :root[data-theme="dark"]{
-    --bg:#0b1420;
-    --surface:#101d2b;
-    --surface-2:#152435;
-    --ink:#e7edf1;
-    --ink-dim:#93a7b6;
-    --line:#213244;
-    --accent:#3fa9a0;
-    --accent-ink:#bfe9e3;
-    --accent-soft:#12302f;
-    --p1:#e5716c;
-    --p1-soft:#3a1a1c;
-    --p2:#e4a24e;
-    --p2-soft:#3a2c14;
-    --p3:#57bd88;
-    --p3-soft:#123a26;
-    --slate:#8ea3b3;
-    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 10px 30px rgba(0,0,0,0.35);
-  }
+/* ---------- staffing rail ---------- */
+.ctl{margin-bottom:18px}
+.ctl-head{display:flex; align-items:baseline; justify-content:space-between; gap:8px; margin-bottom:7px}
+.ctl-head label{font-size:13px; color:var(--text-dim)}
+.ctl-head label{flex:1 1 auto; min-width:0}
+.ctl-head input.ctl-val,
+.ctl-val{
+  font-family:var(--mono); font-size:13px; font-weight:600; color:var(--text);
+  font-variant-numeric:tabular-nums; background:none; border:1px solid transparent;
+  border-radius:4px; padding:2px 6px; cursor:text; text-align:right;
+  width:56px; flex:0 0 56px;
+}
+span.ctl-val{width:auto; flex:none}
+.ctl-val:hover{border-color:var(--border); background:#0A1A2C}
+.ctl-val.editing{border-color:var(--nuhs-blue); background:#0A1A2C; cursor:auto}
+.ctl-val::-webkit-outer-spin-button,.ctl-val::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.ctl-val[type=number]{-moz-appearance:textfield}
 
-  *{box-sizing:border-box;}
-  body{
-    margin:0;
-    background:var(--bg);
-    color:var(--ink);
-    font-family:"IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
-    -webkit-font-smoothing:antialiased;
-  }
-  .mono{ font-family:"IBM Plex Mono", ui-monospace, "SF Mono", monospace; font-variant-numeric: tabular-nums; }
+.playrow{display:flex; gap:10px; margin-top:4px}
+.playrow .btn{flex:1}
 
-  .app{
-    display:grid;
-    grid-template-columns: 300px 1fr;
-    gap:16px;
-    padding:20px;
-    max-width:1440px;
-    margin:0 auto;
-  }
-  @media (max-width: 980px){
-    .app{ grid-template-columns: 1fr; }
-  }
+.legend{display:flex; flex-direction:column; gap:9px}
+.legend .li{display:flex; align-items:center; gap:9px; font-size:12.5px; color:var(--text-dim)}
+.legend .dot{width:9px; height:9px; border-radius:50%; flex:none}
 
-  header.top{
-    grid-column: 1 / -1;
-    display:flex;
-    align-items:baseline;
-    justify-content:space-between;
-    gap:12px;
-    padding: 4px 4px 12px 4px;
-    border-bottom:1px solid var(--line);
-    margin-bottom:4px;
-  }
-  header.top h1{
-    font-size:1.15rem;
-    font-weight:700;
-    letter-spacing:-0.01em;
-    margin:0;
-    text-wrap:balance;
-  }
-  header.top .sub{ color:var(--ink-dim); font-size:0.82rem; }
-  header.top .badge{
-    font-family:"IBM Plex Mono", monospace;
-    font-size:0.72rem;
-    color:var(--accent-ink);
-    background:var(--accent-soft);
-    border:1px solid var(--accent);
-    padding:3px 8px;
-    border-radius:999px;
-    white-space:nowrap;
-  }
+/* ---------- KPI row ---------- */
+.kpis{display:grid; grid-template-columns:repeat(4,1fr); gap:12px; flex:none}
+.kpi{background:var(--panel-deep); border:1px solid var(--border); border-radius:var(--r);
+  box-shadow:var(--glow); padding:14px 16px}
+.kpi .k{font:700 10.5px/1 var(--ui); letter-spacing:.09em; text-transform:uppercase;
+  color:var(--text-dim); display:block; margin-bottom:9px}
+.kpi .v{font-family:var(--mono); font-size:30px; font-weight:600; line-height:1;
+  font-variant-numeric:tabular-nums}
+.kpi .v small{font-size:13px; color:var(--text-dim); font-weight:400; margin-left:2px}
 
-  .panel{
-    background:var(--surface);
-    border:1px solid var(--line);
-    border-radius:12px;
-    box-shadow:var(--shadow);
-    padding:16px;
-  }
+/* ---------- stage ---------- */
+.flowpanel{flex:1; min-height:0; display:flex; flex-direction:column; position:relative}
+.flowhead{display:flex; align-items:center; justify-content:space-between;
+  padding:14px 16px; border-bottom:1px solid var(--border-soft)}
+.flowhead .t{font-size:14px; font-weight:600}
+.flowhead .clock{font-family:var(--mono); font-size:12.5px; color:var(--text-dim)}
+#stage{display:block; width:100%; flex:1; min-height:0}
 
-  .sidebar{ display:flex; flex-direction:column; gap:14px; }
-  .sidebar h2{
-    font-size:0.68rem;
-    text-transform:uppercase;
-    letter-spacing:0.08em;
-    color:var(--ink-dim);
-    margin:0 0 10px 0;
-    font-weight:600;
-  }
+.flash{
+  position:absolute; top:11px; right:130px; z-index:5;
+  font:600 10.5px/1 var(--ui); letter-spacing:.08em; text-transform:uppercase;
+  color:var(--p1); border:1px solid var(--p1); border-radius:999px;
+  padding:5px 11px; opacity:0; transition:opacity .3s; pointer-events:none;
+}
+.flash.show{opacity:1}
 
-  .control{ margin-bottom:12px; }
-  .control:last-child{ margin-bottom:0; }
-  .control label{
-    display:flex;
-    justify-content:space-between;
-    font-size:0.8rem;
-    margin-bottom:5px;
-    color:var(--ink);
-  }
-  .control label .val{ font-family:"IBM Plex Mono", monospace; color:var(--accent-ink); font-weight:600;}
-  input[type=range]{
-    width:100%;
-    accent-color: var(--accent);
-    height:4px;
-    cursor:pointer;
-  }
-  input[type=range]:focus-visible{ outline:2px solid var(--focus); outline-offset:3px; }
+.bottom{display:grid; grid-template-columns:1fr 1fr; gap:12px; flex:none; height:238px}
 
-  .btnrow{ display:flex; gap:8px; }
-  button{
-    font-family:inherit;
-    font-size:0.82rem;
-    font-weight:600;
-    border-radius:8px;
-    border:1px solid var(--line);
-    background:var(--surface-2);
-    color:var(--ink);
-    padding:8px 12px;
-    cursor:pointer;
-    flex:1;
-  }
-  button:hover{ border-color:var(--accent); }
-  button.primary{
-    background:var(--accent);
-    border-color:var(--accent);
-    color:#f4fbfa;
-  }
-  button:focus-visible{ outline:2px solid var(--focus); outline-offset:2px; }
+/* resource bars */
+.resbar{margin-bottom:14px}
+.resbar:last-child{margin-bottom:0}
+.rlabel{display:flex; justify-content:space-between; font-size:12.5px;
+  color:var(--text-dim); margin-bottom:6px}
+.rlabel .n{font-family:var(--mono); color:var(--text); font-variant-numeric:tabular-nums}
+.track{height:5px; background:var(--border-soft); border-radius:3px; overflow:hidden}
+.fill{height:100%; border-radius:3px; background:var(--nuhs-cyan); transition:width .3s}
+.fill.warn{background:var(--warning)}
+.fill.crit{background:var(--p1)}
 
-  .legend{ display:flex; flex-direction:column; gap:6px; font-size:0.78rem; }
-  .legend .row{ display:flex; align-items:center; gap:8px; color:var(--ink-dim); }
-  .dot{ width:9px; height:9px; border-radius:50%; flex:none; }
+/* wait table */
+table.waits{width:100%; border-collapse:collapse; font-size:13px}
+table.waits th{font:700 10.5px/1 var(--ui); letter-spacing:.09em; text-transform:uppercase;
+  color:var(--text-dim); text-align:left; padding:0 0 10px}
+table.waits td{padding:9px 0; border-top:1px solid var(--border-soft);
+  font-family:var(--mono); font-variant-numeric:tabular-nums; color:var(--text)}
+table.waits td:first-child{font-family:var(--ui)}
+.acuitychip{display:inline-flex; align-items:center; gap:8px; font-weight:600}
+.acuitychip .dot{width:9px; height:9px; border-radius:50%}
 
-  .main{ display:flex; flex-direction:column; gap:16px; }
+/* load overlay */
+.loadOverlay{position:absolute; inset:0; display:grid; place-items:center;
+  background:rgba(6,19,35,.94); z-index:20; padding:32px}
+.loadOverlay.hidden{display:none}
+.loadBox{font-family:var(--mono); font-size:13px; color:var(--text-dim);
+  text-align:center; line-height:1.9; max-width:560px}
+.loadBox code{color:var(--nuhs-cyan)}
+.loadOverlay.error .loadBox{color:var(--text)}
 
-  .kpis{
-    display:grid;
-    grid-template-columns:repeat(4,1fr);
-    gap:12px;
-  }
-  @media (max-width:700px){ .kpis{ grid-template-columns:repeat(2,1fr);} }
-  .kpi{
-    background:var(--surface);
-    border:1px solid var(--line);
-    border-radius:12px;
-    box-shadow:var(--shadow);
-    padding:12px 14px;
-  }
-  .kpi .label{ font-size:0.68rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-dim); margin-bottom:6px;}
-  .kpi .value{ font-family:"IBM Plex Mono",monospace; font-size:1.35rem; font-weight:600; }
-  .kpi .value small{ font-size:0.7rem; font-weight:500; color:var(--ink-dim); margin-left:3px;}
+.footnote{flex:none; font-size:11.5px; color:var(--text-faint); padding:0 16px 10px}
+/* the rail is one panel; stretch it so its bottom edge matches the stage panels */
+.rail-l > .panel{flex:1; min-height:0}
 
-  .stagepanel{ padding:0; overflow:hidden; }
-  .stagepanel .stagehead{
-    display:flex;
-    justify-content:space-between;
-    align-items:center;
-    padding:12px 16px;
-    border-bottom:1px solid var(--line);
-  }
-  .stagehead .clock{ font-family:"IBM Plex Mono",monospace; font-size:0.85rem; color:var(--ink-dim);}
-  canvas{ display:block; width:100%; }
-
-  .lowerrow{
-    display:grid;
-    grid-template-columns: 1.3fr 1fr;
-    gap:16px;
-  }
-  @media (max-width:900px){ .lowerrow{ grid-template-columns:1fr; } }
-
-  .resbar{ margin-bottom:12px; }
-  .resbar:last-child{ margin-bottom:0; }
-  .resbar .rlabel{
-    display:flex; justify-content:space-between;
-    font-size:0.78rem; margin-bottom:5px; color:var(--ink);
-  }
-  .resbar .rlabel .n{ font-family:"IBM Plex Mono",monospace; color:var(--ink-dim); }
-  .track{ height:8px; border-radius:5px; background:var(--surface-2); overflow:hidden; }
-  .fill{ height:100%; border-radius:5px; background:var(--accent); transition:width 0.25s ease; }
-  .fill.warn{ background:var(--p2); }
-  .fill.crit{ background:var(--p1); }
-
-  table.waits{ width:100%; border-collapse:collapse; font-size:0.82rem;}
-  table.waits th{ text-align:left; font-size:0.68rem; text-transform:uppercase; letter-spacing:0.05em; color:var(--ink-dim); font-weight:600; padding-bottom:8px; border-bottom:1px solid var(--line);}
-  table.waits td{ padding:8px 0; border-bottom:1px solid var(--line); font-family:"IBM Plex Mono",monospace; }
-  table.waits tr:last-child td{ border-bottom:none; }
-  .acuitychip{
-    display:inline-flex; align-items:center; gap:6px;
-    font-family:"IBM Plex Sans",sans-serif; font-weight:600; font-size:0.8rem;
-  }
-
-  footer.note{
-    grid-column:1/-1;
-    font-size:0.74rem;
-    color:var(--ink-dim);
-    padding:6px 4px 0 4px;
-    line-height:1.5;
-  }
-
-  .flash{
-    position:absolute; top:10px; right:14px;
-    font-family:"IBM Plex Mono",monospace;
-    font-size:0.7rem;
-    background:var(--p1-soft); color:var(--p1);
-    border:1px solid var(--p1);
-    padding:3px 9px; border-radius:999px;
-    opacity:0; transition:opacity 0.3s ease;
-    pointer-events:none;
-  }
-  .flash.show{ opacity:1; }
-
-  .loadOverlay{
-    position:absolute; inset:0;
-    background:var(--surface);
-    display:flex; align-items:center; justify-content:center;
-    text-align:center;
-    padding:24px;
-  }
-  .loadBox{
-    max-width:440px;
-    font-size:0.82rem;
-    line-height:1.6;
-    color:var(--ink-dim);
-  }
-  .loadBox.error{ color:var(--p1); }
-  .loadBox code{
-    background:var(--surface-2);
-    padding:2px 6px;
-    border-radius:4px;
-    color:var(--ink);
-  }
-  .loadOverlay.hidden{ display:none; }
+@media (max-width:1100px){
+  .kpis{grid-template-columns:repeat(2,1fr)}
+  .bottom{grid-template-columns:1fr; height:auto}
+}
 </style>
 </head>
 <body>
-
 <div class="app">
-  <header class="top">
-    <div>
-      <h1>ED Flow Simulator</h1>
-      <div class="sub">Calibrated on 114,837 real visits.</div>
-    </div>
-    <div class="badge" id="calBadge">baseline ≈ real medians</div>
-  </header>
+  <div class="cols">
 
-  <aside class="panel sidebar">
-    <div>
-      <h2>Staffing &amp; capacity</h2>
-      <div class="control">
-        <label>Triage nurses <span class="val" id="v-triage">4</span></label>
-        <input type="range" id="s-triage" min="1" max="10" value="4" step="1">
-      </div>
-      <div class="control">
-        <label>Doctors (shared pool) <span class="val" id="v-doc">25</span></label>
-        <input type="range" id="s-doc" min="5" max="45" value="25" step="1">
-      </div>
-      <div class="control">
-        <label>P1 resus bays <span class="val" id="v-p1">4</span></label>
-        <input type="range" id="s-p1" min="1" max="10" value="4" step="1">
-      </div>
-      <div class="control">
-        <label>P2 zone capacity <span class="val" id="v-p2">30</span></label>
-        <input type="range" id="s-p2" min="5" max="60" value="30" step="1">
-      </div>
-      <div class="control">
-        <label>P3 zone capacity <span class="val" id="v-p3">40</span></label>
-        <input type="range" id="s-p3" min="5" max="60" value="40" step="1">
-      </div>
-      <div class="control">
-        <label>Ward boarding slots <span class="val" id="v-board">8</span></label>
-        <input type="range" id="s-board" min="1" max="20" value="8" step="1">
-      </div>
-    </div>
+    <aside class="rail-l">
+      <div class="panel pad flex" style="overflow:auto">
+        <div class="panel-h">Staffing &amp; capacity</div>
 
-    <div>
-      <h2>Playback</h2>
-      <div class="control">
-        <label>Speed <span class="val" id="v-speed">×60</span></label>
-        <input type="range" id="s-speed" min="10" max="480" value="60" step="10">
-      </div>
-      <div class="btnrow">
-        <button class="primary" id="btn-play">Pause</button>
-        <button id="btn-reset">Reset</button>
-      </div>
-    </div>
+        <div class="ctl">
+          <div class="ctl-head"><label for="s-triage">Triage nurses</label>
+            <input class="ctl-val" id="v-triage" type="number" value="4" aria-label="Triage nurses value"></div>
+          <input type="range" id="s-triage" min="1" max="10" value="4" step="1">
+        </div>
+        <div class="ctl">
+          <div class="ctl-head"><label for="s-doc">Doctors (shared pool)</label>
+            <input class="ctl-val" id="v-doc" type="number" value="25" aria-label="Doctors value"></div>
+          <input type="range" id="s-doc" min="5" max="45" value="25" step="1">
+        </div>
+        <div class="ctl">
+          <div class="ctl-head"><label for="s-p1">P1 resus bays</label>
+            <input class="ctl-val" id="v-p1" type="number" value="4" aria-label="P1 resus bays value"></div>
+          <input type="range" id="s-p1" min="1" max="10" value="4" step="1">
+        </div>
+        <div class="ctl">
+          <div class="ctl-head"><label for="s-p2">P2 zone capacity</label>
+            <input class="ctl-val" id="v-p2" type="number" value="30" aria-label="P2 zone capacity value"></div>
+          <input type="range" id="s-p2" min="5" max="60" value="30" step="1">
+        </div>
+        <div class="ctl">
+          <div class="ctl-head"><label for="s-p3">P3 zone capacity</label>
+            <input class="ctl-val" id="v-p3" type="number" value="40" aria-label="P3 zone capacity value"></div>
+          <input type="range" id="s-p3" min="5" max="60" value="40" step="1">
+        </div>
+        <div class="ctl">
+          <div class="ctl-head"><label for="s-board">Ward boarding slots</label>
+            <input class="ctl-val" id="v-board" type="number" value="8" aria-label="Ward boarding slots value"></div>
+          <input type="range" id="s-board" min="1" max="20" value="8" step="1">
+        </div>
 
-    <div>
-      <h2>Acuity legend</h2>
-      <div class="legend">
-        <div class="row"><span class="dot" style="background:var(--p1)"></span> P1 &mdash; resuscitation</div>
-        <div class="row"><span class="dot" style="background:var(--p2)"></span> P2 &mdash; management area</div>
-        <div class="row"><span class="dot" style="background:var(--p3)"></span> P3 &mdash; ambulatory</div>
-      </div>
-    </div>
-  </aside>
+        <div class="panel-h" style="padding:8px 0 12px">Playback</div>
+        <div class="ctl">
+          <div class="ctl-head"><label for="s-speed">Speed</label>
+            <span class="ctl-val mono" id="v-speed" style="cursor:default">&times;60</span></div>
+          <input type="range" id="s-speed" min="10" max="480" value="60" step="10">
+        </div>
+        <div class="playrow">
+          <button class="btn primary" id="btn-play" type="button">Pause</button>
+          <button class="btn" id="btn-reset" type="button">Reset</button>
+        </div>
 
-  <main class="main">
-    <div class="kpis">
-      <div class="kpi"><div class="label">In department now</div><div class="value mono" id="kpi-inED">0</div></div>
-      <div class="kpi"><div class="label">Median wait&nbsp;&rarr;&nbsp;dispo</div><div class="value mono" id="kpi-medwait">&mdash;<small>min</small></div></div>
-      <div class="kpi"><div class="label">Longest queue</div><div class="value mono" id="kpi-queue">&mdash;</div></div>
-      <div class="kpi"><div class="label">Arrivals today</div><div class="value mono" id="kpi-arrivals">0</div></div>
-    </div>
+        <div class="panel-h" style="padding:20px 0 12px">Acuity legend</div>
+        <div class="legend">
+          <div class="li"><span class="dot" style="background:var(--p1)"></span>P1 — resuscitation</div>
+          <div class="li"><span class="dot" style="background:var(--p2)"></span>P2 — management area</div>
+          <div class="li"><span class="dot" style="background:var(--p3)"></span>P3 — ambulatory</div>
+        </div>
+      </div>
+    </aside>
 
-    <div class="panel stagepanel" style="position:relative;">
-      <div class="stagehead">
-        <strong style="font-size:0.85rem;">Patient flow</strong>
-        <span class="clock mono" id="simclock">Day 1 &middot; 00:00</span>
+    <main class="stage">
+      <div class="kpis">
+        <div class="kpi"><span class="k">In department now</span><div class="v" id="kpi-inED">0</div></div>
+        <div class="kpi"><span class="k">Median wait &rarr; dispo</span><div class="v" id="kpi-medwait">&mdash;</div></div>
+        <div class="kpi"><span class="k">Longest queue</span><div class="v" id="kpi-queue">&mdash;</div></div>
+        <div class="kpi"><span class="k">Arrivals today</span><div class="v" id="kpi-arrivals">0</div></div>
       </div>
-      <canvas id="stage" height="360"></canvas>
-      <div class="flash" id="flashMsg">queue backing up</div>
-      <div class="loadOverlay" id="loadOverlay">
-        <div class="loadBox mono" id="loadBoxText">Loading params.json&hellip;</div>
-      </div>
-    </div>
 
-    <div class="lowerrow">
-      <div class="panel">
-        <h2 style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--ink-dim);margin:0 0 12px 0;font-weight:600;">Resource utilization</h2>
-        <div id="resbars"></div>
-      </div>
-      <div class="panel">
-        <h2 style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--ink-dim);margin:0 0 12px 0;font-weight:600;">Rolling wait time (arrival &rarr; disposition)</h2>
-        <table class="waits">
-          <thead><tr><th>Acuity</th><th>Median</th><th>P90</th><th>n (last 6h)</th></tr></thead>
-          <tbody id="waitsBody"></tbody>
-        </table>
-      </div>
-    </div>
-  </main>
+      <section class="panel flowpanel">
+        <div class="flowhead">
+          <span class="t">Patient flow</span>
+          <span class="clock" id="simclock">Day 1 &middot; 00:00</span>
+        </div>
+        <div class="flash" id="flashMsg">queue backing up</div>
+        <canvas id="stage"></canvas>
+        <div class="loadOverlay" id="loadOverlay">
+          <div class="loadBox" id="loadBoxText">Loading params.json&hellip;</div>
+        </div>
+      </section>
 
-  <footer class="note">
-    Durations are sampled from lognormal fits to the real dataset (per acuity, per stage); branch probabilities (up/down-triage, disposition mix) are the empirical transition rates. Default capacities are the combination that reproduces the observed real-world median wait times most closely.
-  </footer>
+      <div class="bottom">
+        <section class="panel pad flex" style="overflow:auto">
+          <div class="panel-h">Resource utilization</div>
+          <div id="resbars"></div>
+        </section>
+        <section class="panel pad flex" style="overflow:auto">
+          <div class="panel-h">Rolling wait time (arrival &rarr; disposition)</div>
+          <table class="waits">
+            <thead><tr><th>Acuity</th><th>Median</th><th>P90</th><th>N (last 6h)</th></tr></thead>
+            <tbody id="waitsBody"></tbody>
+          </table>
+        </section>
+      </div>
+
+    </main>
+
+  </div>
+  <p class="footnote">Durations are sampled from lognormal fits to the real dataset (per acuity, per stage);
+  branch probabilities are the empirical transition rates. Default capacities reproduce the observed
+  real-world median wait times most closely.</p>
 </div>
 
+<script src="nuhs-shell.js"></script>
 <script>
 (function(){
   "use strict";
 
-  // ---------- Calibrated parameters ----------
-  // Loaded at startup from params.json (same file the Python/SimPy engine
-  // reads) rather than copied inline, so re-fitting the model on a new
-  // dataset just means dropping in a new params.json -- no code changes.
-  let P = null;
+  var bar = NUHS.mountTopBar({
+    active: "simulate",
+    onHelp: function(){
+      NUHS.confirm({
+        title: "Simulate",
+        body: "Drag the capacity sliders or type into the numbers to test a scenario. " +
+              "Zone borders fill clockwise as they approach capacity. Speed is simulated " +
+              "minutes per real second.",
+        confirmLabel: "Got it", cancelLabel: "Close"
+      });
+    },
+    onExport: function(){ exportRun(); },
+    onSave: function(){ NUHS.toast("Scenario capacities kept in this browser"); saveCaps(); },
+    pngEnabled: false
+  });
+  // these two only mean something on the Plan side; say so rather than sit dead
+  bar.bar.querySelectorAll(".act").forEach(function(b){
+    if(!b.disabled) return;
+    var t = b.textContent.trim().toLowerCase();
+    if(t === "import") b.title = "Import a plan from the Plan tab";
+    if(t === "png")    b.title = "PNG export is available on the Plan tab";
+  });
+
+  /* ---------- calibrated parameters ---------- */
+  var P = null;
 
   function validateParams(p){
-    const required = ["triage_duration","triage_acuity_dist","doc_wait","zone_time",
+    var required = ["triage_duration","triage_acuity_dist","doc_wait","zone_time",
       "acuity_transition","disposition_dist","discharge_time","decant_time","edtu_time",
       "admit_bed_req_wait","admit_req_to_assigned","admit_assigned_to_admit","arrival_rate_per_hour"];
-    const missing = required.filter(k => !(k in p));
-    if (missing.length) throw new Error("params.json is missing: " + missing.join(", "));
+    var missing = required.filter(function(k){ return !(k in p); });
+    if(missing.length) throw new Error("params.json is missing: " + missing.join(", "));
   }
 
   function sampleLognormal(spec){
-    // Box-Muller
-    let u1 = Math.random() || 1e-9, u2 = Math.random();
-    let z = Math.sqrt(-2*Math.log(u1)) * Math.cos(2*Math.PI*u2);
+    var u1 = Math.random() || 1e-9, u2 = Math.random();
+    var z = Math.sqrt(-2*Math.log(u1)) * Math.cos(2*Math.PI*u2);
     return Math.max(0.2, Math.exp(spec.mu + spec.sigma*z));
   }
   function weightedChoice(dist){
-    const keys = Object.keys(dist);
-    const total = keys.reduce((s,k)=>s+dist[k],0);
-    let r = Math.random()*total;
-    for(const k of keys){ r -= dist[k]; if(r<=0) return k; }
+    var keys = Object.keys(dist);
+    var total = keys.reduce(function(s,k){ return s + dist[k]; }, 0);
+    var r = Math.random()*total;
+    for(var i=0;i<keys.length;i++){ r -= dist[keys[i]]; if(r<=0) return keys[i]; }
     return keys[keys.length-1];
   }
 
-  // ---------- Simulation state ----------
-  let cap = { triage:4, doctors:25, p1:4, p2:30, p3:40, board:8 };
-  let speed = 60; // sim-minutes per real second
-  let playing = true;
-
-  let simMin = 0; // total simulated minutes since start
-  let nextPid = 1;
-  let arrivalsToday = 0;
-  let currentDay = 1;
-
-  let patients = []; // active patients
-  let history = []; // completed dispo events {t, acuity, wait}
-
-  // resource occupancy trackers (counts)
-  let occ = { triage:0, doctors:0, p1:0, p2:0, p3:0, board:0 };
-
-  // queues (arrays of patient objects waiting)
-  let qTriage = [];
-  let qZone = { P1:[], P2:[], P3:[] };
-  let qBoard = [];
+  /* ---------- simulation state ---------- */
+  var CAPS_KEY = "nuhs-ed-sim-caps-v1";
+  var cap = { triage:4, doctors:25, p1:4, p2:30, p3:40, board:8 };
+  var speed = 60, playing = true;
+  var simMin = 0, nextPid = 1, arrivalsToday = 0, currentDay = 1;
+  var patients = [], history = [];
+  var occ = { triage:0, doctors:0, p1:0, p2:0, p3:0, board:0 };
+  var qTriage = [], qZone = { P1:[], P2:[], P3:[] }, qBoard = [];
 
   function resetSim(){
     simMin = 0; nextPid = 1; arrivalsToday = 0; currentDay = 1;
@@ -443,92 +273,69 @@
   resetSim();
 
   function spawnPatient(){
-    const p = {
-      id: nextPid++,
-      arrivalMin: simMin,
-      stage: "queue_triage",
-      remaining: 0,
-      triageAcuity: null,
-      consultAcuity: null,
-      disposition: null,
-      // render position (x,y in stage coordinate space 0..1)
-      rx: 0.03 + Math.random()*0.02, ry: Math.random(),
-      tx: 0.03, ty: Math.random(),
-    };
-    patients.push(p);
+    patients.push({
+      id: nextPid++, arrivalMin: simMin, stage:"queue_triage", remaining:0,
+      triageAcuity:null, consultAcuity:null, disposition:null,
+      rx:undefined, ry:undefined
+    });
     arrivalsToday++;
   }
-
   function hourOfSim(){ return Math.floor(simMin/60) % 24; }
 
   function stepMinute(){
     simMin += 1;
-    if (Math.floor(simMin/1440)+1 !== currentDay){
+    if(Math.floor(simMin/1440)+1 !== currentDay){
       currentDay = Math.floor(simMin/1440)+1;
       arrivalsToday = 0;
     }
-    // Poisson-thinning style arrivals
-    const rate = P.arrival_rate_per_hour[hourOfSim()] || 1;
-    const pArrival = rate/60;
-    if (Math.random() < pArrival) spawnPatient();
+    var rate = P.arrival_rate_per_hour[hourOfSim()] || 1;
+    if(Math.random() < rate/60) spawnPatient();
 
-    // advance each patient's current stage timer / try to move them along
-    for (const p of patients){
-      advancePatient(p);
-    }
-    // try to admit from queues into resources
+    for(var i=0;i<patients.length;i++) advancePatient(patients[i]);
     tryAdmitTriageQueue();
     tryAdmitZoneQueues();
     tryAdmitBoardQueue();
-
-    // drop completed patients into history & remove
-    patients = patients.filter(p => p.stage !== "done");
+    patients = patients.filter(function(p){ return p.stage !== "done"; });
   }
 
   function tryAdmitTriageQueue(){
     while(qTriage.length && occ.triage < cap.triage){
-      const p = qTriage.shift();
-      occ.triage++;
-      p.stage = "triage";
+      var p = qTriage.shift();
+      occ.triage++; p.stage = "triage";
       p.remaining = sampleLognormal(P.triage_duration);
     }
   }
   function tryAdmitZoneQueues(){
-    for(const acu of ["P1","P2","P3"]){
-      const capacity = acu==="P1"?cap.p1: acu==="P2"?cap.p2: cap.p3;
-      const occKey = acu==="P1"?"p1": acu==="P2"?"p2":"p3";
-      const q = qZone[acu];
+    ["P1","P2","P3"].forEach(function(acu){
+      var capacity = acu==="P1"?cap.p1 : acu==="P2"?cap.p2 : cap.p3;
+      var occKey   = acu==="P1"?"p1"   : acu==="P2"?"p2"   : "p3";
+      var q = qZone[acu];
       while(q.length && occ[occKey] < capacity){
-        const p = q.shift();
-        occ[occKey]++;
-        p.stage = "zone_wait_doctor";
-        p.remaining = 0; // will request doctor next tick
+        var p = q.shift();
+        occ[occKey]++; p.stage = "zone_wait_doctor"; p.remaining = 0;
       }
-    }
+    });
   }
   function tryAdmitBoardQueue(){
-    // priority: none needed, FIFO
     while(qBoard.length && occ.board < cap.board){
-      const p = qBoard.shift();
-      occ.board++;
-      p.stage = "boarding";
+      var p = qBoard.shift();
+      occ.board++; p.stage = "boarding";
       p.remaining = sampleLognormal(P.admit_assigned_to_admit);
     }
   }
-
   function releaseZone(p){
-    const occKey = p.consultAcuity==="P1"?"p1": p.consultAcuity==="P2"?"p2":"p3";
+    var occKey = p.consultAcuity==="P1"?"p1" : p.consultAcuity==="P2"?"p2" : "p3";
     occ[occKey] = Math.max(0, occ[occKey]-1);
   }
 
   function advancePatient(p){
     switch(p.stage){
       case "queue_triage":
-        if (!qTriage.includes(p)) qTriage.push(p);
+        if(qTriage.indexOf(p) === -1) qTriage.push(p);
         break;
       case "triage":
         p.remaining -= 1;
-        if (p.remaining <= 0){
+        if(p.remaining <= 0){
           occ.triage = Math.max(0, occ.triage-1);
           p.triageAcuity = weightedChoice(P.triage_acuity_dist);
           p.consultAcuity = weightedChoice(P.acuity_transition[p.triageAcuity]);
@@ -536,19 +343,16 @@
           qZone[p.consultAcuity].push(p);
         }
         break;
-      case "queue_zone":
-        // waiting handled by tryAdmitZoneQueues
-        break;
+      case "queue_zone": break;
       case "zone_wait_doctor":
-        if (occ.doctors < cap.doctors){
-          occ.doctors++;
-          p.stage = "with_doctor";
+        if(occ.doctors < cap.doctors){
+          occ.doctors++; p.stage = "with_doctor";
           p.remaining = sampleLognormal(P.doc_wait[p.triageAcuity]);
         }
         break;
       case "with_doctor":
         p.remaining -= 1;
-        if (p.remaining <= 0){
+        if(p.remaining <= 0){
           occ.doctors = Math.max(0, occ.doctors-1);
           p.stage = "in_zone_treatment";
           p.remaining = sampleLognormal(P.zone_time[p.consultAcuity]);
@@ -556,242 +360,354 @@
         break;
       case "in_zone_treatment":
         p.remaining -= 1;
-        if (p.remaining <= 0){
+        if(p.remaining <= 0){
           releaseZone(p);
           p.dispoAt = simMin;
-          history.push({t: simMin, acuity: p.triageAcuity, wait: simMin - p.arrivalMin});
-          if (history.length > 4000) history.shift();
+          history.push({ t:simMin, acuity:p.triageAcuity, wait:simMin - p.arrivalMin });
+          if(history.length > 4000) history.shift();
           p.disposition = weightedChoice(P.disposition_dist[p.consultAcuity]);
-          if (p.disposition === "Discharge"){ p.stage="post_discharge"; p.remaining=sampleLognormal(P.discharge_time); }
-          else if (p.disposition === "Decant"){ p.stage="post_decant"; p.remaining=sampleLognormal(P.decant_time); }
-          else if (p.disposition === "EDTU"){ p.stage="post_edtu"; p.remaining=sampleLognormal(P.edtu_time); }
+          if(p.disposition === "Discharge"){ p.stage="post_discharge"; p.remaining=sampleLognormal(P.discharge_time); }
+          else if(p.disposition === "Decant"){ p.stage="post_decant"; p.remaining=sampleLognormal(P.decant_time); }
+          else if(p.disposition === "EDTU"){ p.stage="post_edtu"; p.remaining=sampleLognormal(P.edtu_time); }
           else { p.stage="admit_bedreq"; p.remaining=sampleLognormal(P.admit_bed_req_wait); }
         }
         break;
       case "post_discharge": case "post_decant": case "post_edtu":
         p.remaining -= 1;
-        if (p.remaining <= 0) p.stage = "done";
+        if(p.remaining <= 0) p.stage = "done";
         break;
       case "admit_bedreq":
         p.remaining -= 1;
-        if (p.remaining <= 0){ p.stage="admit_reqassigned"; p.remaining=sampleLognormal(P.admit_req_to_assigned); }
+        if(p.remaining <= 0){ p.stage="admit_reqassigned"; p.remaining=sampleLognormal(P.admit_req_to_assigned); }
         break;
       case "admit_reqassigned":
         p.remaining -= 1;
-        if (p.remaining <= 0){
-          p.stage = "queue_board";
-          qBoard.push(p);
-        }
+        if(p.remaining <= 0){ p.stage="queue_board"; qBoard.push(p); }
         break;
-      case "queue_board":
-        break; // handled by tryAdmitBoardQueue
+      case "queue_board": break;
       case "boarding":
         p.remaining -= 1;
-        if (p.remaining <= 0){
-          occ.board = Math.max(0, occ.board-1);
-          p.stage = "done";
-        }
+        if(p.remaining <= 0){ occ.board = Math.max(0, occ.board-1); p.stage = "done"; }
         break;
     }
   }
 
-  // ---------- UI wiring ----------
-  const el = id => document.getElementById(id);
-  function bindSlider(sliderId, valId, setter, fmt){
-    const s = el(sliderId), v = el(valId);
-    s.addEventListener("input", ()=>{
-      const val = Number(s.value);
-      setter(val);
-      v.textContent = fmt ? fmt(val) : val;
-    });
-  }
-  bindSlider("s-triage","v-triage", val=>cap.triage=val);
-  bindSlider("s-doc","v-doc", val=>cap.doctors=val);
-  bindSlider("s-p1","v-p1", val=>cap.p1=val);
-  bindSlider("s-p2","v-p2", val=>cap.p2=val);
-  bindSlider("s-p3","v-p3", val=>cap.p3=val);
-  bindSlider("s-board","v-board", val=>cap.board=val);
-  bindSlider("s-speed","v-speed", val=>speed=val, val=>"×"+val);
+  /* ---------- controls ---------- */
+  var el = function(id){ return document.getElementById(id); };
 
-  el("btn-play").addEventListener("click", ()=>{
-    playing = !playing;
-    el("btn-play").textContent = playing ? "Pause" : "Play";
-  });
-  el("btn-reset").addEventListener("click", ()=>{
-    resetSim();
-  });
-
-  // ---------- Rendering ----------
-  const canvas = el("stage");
-  const ctx = canvas.getContext("2d");
-  function resizeCanvas(){
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width * devicePixelRatio;
-    canvas.height = 360 * devicePixelRatio;
-    ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
-  }
-  window.addEventListener("resize", resizeCanvas);
-
-  const stageDefs = [
-    {key:"queue_triage", label:"Arrival / Triage queue", x0:0.00, x1:0.16},
-    {key:"triage",       label:"Triage", x0:0.17, x1:0.27},
-    {key:"zone",         label:"P1 / P2 / P3 zones", x0:0.29, x1:0.62},
-    {key:"dispo",        label:"Disposition", x0:0.64, x1:0.80},
-    {key:"exit",         label:"Departed", x0:0.82, x1:1.00},
+  var SLIDERS = [
+    { s:"s-triage", v:"v-triage", key:"triage" },
+    { s:"s-doc",    v:"v-doc",    key:"doctors" },
+    { s:"s-p1",     v:"v-p1",     key:"p1" },
+    { s:"s-p2",     v:"v-p2",     key:"p2" },
+    { s:"s-p3",     v:"v-p3",     key:"p3" },
+    { s:"s-board",  v:"v-board",  key:"board" }
   ];
 
+  SLIDERS.forEach(function(d){
+    var s = el(d.s), v = el(d.v);
+    s.addEventListener("input", function(){
+      cap[d.key] = Number(s.value);
+      v.value = s.value;
+      saveCaps();
+    });
+    // number is directly editable; clamp to the slider's own range
+    function commit(){
+      var min = Number(s.min), max = Number(s.max);
+      var n = Math.round(Number(v.value));
+      if(!isFinite(n)) n = cap[d.key];
+      n = Math.min(max, Math.max(min, n));
+      v.value = n; s.value = n; cap[d.key] = n;
+      v.classList.remove("editing");
+      saveCaps();
+    }
+    v.addEventListener("focus", function(){ v.classList.add("editing"); v.select(); });
+    v.addEventListener("blur", commit);
+    v.addEventListener("keydown", function(e){
+      if(e.key === "Enter"){ e.preventDefault(); v.blur(); }
+      if(e.key === "Escape"){ v.value = s.value; v.blur(); }
+    });
+    v.setAttribute("min", s.min);
+    v.setAttribute("max", s.max);
+  });
+
+  el("s-speed").addEventListener("input", function(){
+    speed = Number(this.value);
+    el("v-speed").innerHTML = "&times;" + speed;
+  });
+
+  el("btn-play").addEventListener("click", function(){
+    playing = !playing;
+    this.textContent = playing ? "Pause" : "Play";
+  });
+  el("btn-reset").addEventListener("click", resetSim);
+
+  function saveCaps(){
+    try{ localStorage.setItem(CAPS_KEY, JSON.stringify(cap)); }catch(e){}
+  }
+  function loadCaps(){
+    try{
+      var raw = localStorage.getItem(CAPS_KEY);
+      if(!raw) return;
+      var saved = JSON.parse(raw);
+      SLIDERS.forEach(function(d){
+        if(typeof saved[d.key] !== "number") return;
+        var s = el(d.s), n = Math.min(Number(s.max), Math.max(Number(s.min), saved[d.key]));
+        cap[d.key] = n; s.value = n; el(d.v).value = n;
+      });
+    }catch(e){}
+  }
+
+  /* ---------- canvas ---------- */
+  var canvas = el("stage"), ctx = canvas.getContext("2d");
+  var cssW = 0, cssH = 0;
+
+  function resizeCanvas(){
+    var rect = canvas.getBoundingClientRect();
+    cssW = rect.width; cssH = rect.height;
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width  = Math.max(1, Math.round(cssW * dpr));
+    canvas.height = Math.max(1, Math.round(cssH * dpr));
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+  }
+  new ResizeObserver(resizeCanvas).observe(canvas);
+
+  var cssCache = {};
+  function css(v){
+    if(!cssCache[v]) cssCache[v] = getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+    return cssCache[v];
+  }
   function colorFor(acuity){
-    if (acuity === "P1") return getCss("--p1");
-    if (acuity === "P2") return getCss("--p2");
-    if (acuity === "P3") return getCss("--p3");
-    return getCss("--slate");
-  }
-  let cssCache = {};
-  function getCss(varName){
-    if (!cssCache[varName]) cssCache[varName] = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
-    return cssCache[varName];
-  }
-  function invalidateCssCache(){ cssCache = {}; }
-
-  function stageGroupFor(p){
-    if (["queue_triage"].includes(p.stage)) return "queue_triage";
-    if (["triage"].includes(p.stage)) return "triage";
-    if (["queue_zone","zone_wait_doctor","with_doctor","in_zone_treatment"].includes(p.stage)) return "zone";
-    if (["post_discharge","post_decant","post_edtu","admit_bedreq","admit_reqassigned","queue_board","boarding"].includes(p.stage)) return "dispo";
-    return "exit";
+    if(acuity === "P1") return css("--p1");
+    if(acuity === "P2") return css("--p2");
+    if(acuity === "P3") return css("--p3");
+    return css("--boarding");
   }
 
-  function laneY(acuity){
-    if (acuity === "P1") return 0.18;
-    if (acuity === "P2") return 0.5;
-    return 0.82;
+  /* Stage geometry, as fractions of the canvas box. Zones stack as three rows;
+     Disposition sits above Boarding Ward in a shared column. */
+  function layout(){
+    var pad = 16;
+    var w = cssW - pad*2, h = cssH - pad*2;
+    var x = pad, y = pad;
+    var colQueue = 0.135, colTriage = 0.105, colZones = 0.395, colDispo = 0.195, colDep = 0.125;
+    var gapX = 0.0125 * w;
+    var xQueue  = x;
+    var xTriage = xQueue  + colQueue*w  + gapX;
+    var xZones  = xTriage + colTriage*w + gapX;
+    var xDispo  = xZones  + colZones*w  + gapX;
+    var xDep    = xDispo  + colDispo*w  + gapX;
+
+    var rowGap = 10;
+    var zoneH = (h - rowGap*2) / 3;
+
+    return {
+      queue:   { x:xQueue,  y:y, w:colQueue*w,  h:h, label:"Arrival / Triage Queue" },
+      triage:  { x:xTriage, y:y, w:colTriage*w, h:h, label:"Triage" },
+      P1:      { x:xZones, y:y,                     w:colZones*w, h:zoneH, label:"P1", color:css("--p1"), capKey:"p1", occKey:"p1" },
+      P2:      { x:xZones, y:y+zoneH+rowGap,        w:colZones*w, h:zoneH, label:"P2", color:css("--p2"), capKey:"p2", occKey:"p2" },
+      P3:      { x:xZones, y:y+(zoneH+rowGap)*2,    w:colZones*w, h:zoneH, label:"P3", color:css("--p3"), capKey:"p3", occKey:"p3" },
+      dispo:   { x:xDispo, y:y,                     w:colDispo*w, h:(h-rowGap)/2, label:"Disposition" },
+      board:   { x:xDispo, y:y+(h-rowGap)/2+rowGap, w:colDispo*w, h:(h-rowGap)/2, label:"Boarding Ward",
+                 color:css("--boarding"), capKey:"board", occKey:"board" },
+      departed:{ x:xDep,   y:y, w:colDep*w, h:h, label:"Departed" }
+    };
+  }
+
+  function roundRectPath(c, x, y, w, h, r){
+    r = Math.min(r, w/2, h/2);
+    c.beginPath();
+    c.moveTo(x+r, y);
+    c.lineTo(x+w-r, y);              c.arcTo(x+w, y,   x+w, y+r,   r);
+    c.lineTo(x+w, y+h-r);            c.arcTo(x+w, y+h, x+w-r, y+h, r);
+    c.lineTo(x+r, y+h);              c.arcTo(x,   y+h, x,   y+h-r, r);
+    c.lineTo(x, y+r);                c.arcTo(x,   y,   x+r, y,     r);
+    c.closePath();
+  }
+  function roundRectPerimeter(w, h, r){
+    r = Math.min(r, w/2, h/2);
+    return 2*(w - 2*r) + 2*(h - 2*r) + 2*Math.PI*r;
+  }
+
+  /* Capacity ring: a 1pt outline, over-stroked at 6pt for the filled fraction.
+     The path starts at the top-left corner and runs clockwise, so the top edge
+     fills first, then the right, bottom and left. */
+  function drawCapacityBox(box, used, capacity){
+    var r = 5;
+    roundRectPath(ctx, box.x, box.y, box.w, box.h, r);
+    ctx.fillStyle = "rgba(255,255,255,0.012)";
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = box.color;
+    ctx.globalAlpha = 0.55;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    var frac = capacity > 0 ? Math.min(1, used / capacity) : 0;
+    if(frac > 0){
+      var per = roundRectPerimeter(box.w, box.h, r);
+      roundRectPath(ctx, box.x, box.y, box.w, box.h, r);
+      ctx.save();
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = box.color;
+      ctx.lineCap = "butt";
+      ctx.setLineDash([per * frac, per]);
+      ctx.stroke();
+      ctx.restore();
+      ctx.setLineDash([]);
+    }
+  }
+
+  function drawPlainBox(box){
+    roundRectPath(ctx, box.x, box.y, box.w, box.h, 5);
+    ctx.fillStyle = "rgba(255,255,255,0.012)";
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = css("--border");
+    ctx.stroke();
+  }
+
+  function boxLabel(box, right){
+    ctx.font = '600 11px "Open Sans", sans-serif';
+    ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = box.color || css("--text-dim");
+    ctx.fillText(box.label, box.x + 12, box.y + 20);
+    if(right != null){
+      ctx.font = '600 11px "IBM Plex Mono", monospace';
+      ctx.textAlign = "right";
+      ctx.fillStyle = box.color || css("--text-dim");
+      ctx.fillText(right, box.x + box.w - 12, box.y + 20);
+    }
+  }
+
+  /* which box a patient renders inside */
+  function boxKeyFor(p){
+    switch(p.stage){
+      case "queue_triage": return "queue";
+      case "triage":       return "triage";
+      case "queue_zone": case "zone_wait_doctor": case "with_doctor": case "in_zone_treatment":
+        return p.consultAcuity || "P2";
+      case "post_discharge": case "post_decant": case "post_edtu":
+      case "admit_bedreq":   case "admit_reqassigned":
+        return "dispo";
+      case "queue_board": case "boarding":
+        return "board";
+      default: return "departed";
+    }
+  }
+
+  function hash01(n, salt){
+    var x = (n * 2654435761 + salt * 40503) >>> 0;
+    x ^= x >>> 15; x = Math.imul(x, 2246822519);
+    x ^= x >>> 13; x = Math.imul(x, 3266489917);
+    x ^= x >>> 16;
+    return (x >>> 0) / 4294967296;
   }
 
   function draw(){
-    const w = canvas.getBoundingClientRect().width;
-    const h = 360;
-    ctx.clearRect(0,0,w,h);
+    if(!cssW || !cssH) return;
+    ctx.clearRect(0,0,cssW,cssH);
+    var L = layout();
 
-    const ink = getCss("--ink"), inkDim = getCss("--ink-dim"), line = getCss("--line"), surface2 = getCss("--surface-2");
+    ["queue","triage","dispo","departed"].forEach(function(k){ drawPlainBox(L[k]); });
+    ["P1","P2","P3","board"].forEach(function(k){
+      drawCapacityBox(L[k], occ[L[k].occKey], cap[L[k].capKey]);
+    });
 
-    // draw stage bands
-    ctx.font = "600 11px 'IBM Plex Mono', monospace";
-    for (const s of stageDefs){
-      const x0 = s.x0*w, x1 = s.x1*w;
-      ctx.fillStyle = surface2;
-      ctx.strokeStyle = line;
-      roundRect(ctx, x0, 14, x1-x0, h-28, 10);
-      ctx.fill(); ctx.stroke();
-      ctx.fillStyle = inkDim;
-      ctx.fillText(s.label.toUpperCase(), x0+10, 30);
-    }
+    boxLabel(L.queue, null);
+    boxLabel(L.triage, null);
+    ["P1","P2","P3"].forEach(function(k){
+      boxLabel(L[k], occ[L[k].occKey] + " / " + cap[L[k].capKey]);
+    });
+    boxLabel(L.board, occ.board + " / " + cap.board);
 
-    // position + draw each patient as a dot
-    for (const p of patients){
-      const group = stageGroupFor(p);
-      const def = stageDefs.find(d=>d.key===group);
-      const acu = p.triageAcuity || "queue";
-      const ly = p.triageAcuity ? laneY(p.triageAcuity) : (0.15 + (p.id % 7)/7*0.7);
+    var dispoCount = patients.filter(function(p){ return boxKeyFor(p) === "dispo"; }).length;
+    boxLabel(L.dispo, String(dispoCount));
+    boxLabel(L.departed, null);
 
-      // jitter target x within the band based on progress hash (stable per patient+stage)
-      const jitterSeed = (p.id*37 + simMin*0) % 97;
-      const bandWidth = (def.x1-def.x0)*w;
-      const tx = def.x0*w + 14 + (jitterSeed/97)*(bandWidth-28);
-      const ty = ly*h;
-
-      if (p.rx === undefined){ p.rx = tx; p.ry = ty; }
-      p.rx += (tx-p.rx)*0.12;
-      p.ry += (ty-p.ry)*0.12;
+    for(var i=0;i<patients.length;i++){
+      var p = patients[i];
+      var box = L[boxKeyFor(p)];
+      // stable pseudo-random slot inside the box, seeded by patient id.
+      // A mixing hash, not a modulus — sequential ids must not line up on a diagonal.
+      var sx = hash01(p.id, 1), sy = hash01(p.id, 2);
+      var tx = box.x + 14 + sx * Math.max(1, box.w - 28);
+      var ty = box.y + 30 + sy * Math.max(1, box.h - 44);
+      if(p.rx === undefined){ p.rx = tx; p.ry = ty; }
+      p.rx += (tx - p.rx) * 0.12;
+      p.ry += (ty - p.ry) * 0.12;
 
       ctx.beginPath();
       ctx.fillStyle = colorFor(p.triageAcuity);
-      ctx.arc(p.rx, p.ry, 4.2, 0, Math.PI*2);
+      ctx.arc(p.rx, p.ry, 4, 0, Math.PI*2);
       ctx.fill();
     }
-
-    // lane labels inside zone band
-    ctx.font = "500 9px 'IBM Plex Sans', sans-serif";
-    ctx.fillStyle = inkDim;
-    const zoneDef = stageDefs.find(d=>d.key==="zone");
-    ["P1","P2","P3"].forEach(acu=>{
-      ctx.fillStyle = colorFor(acu);
-      ctx.fillText(acu, zoneDef.x0*w+10, laneY(acu)*h - 10);
-    });
-  }
-  function roundRect(ctx,x,y,w,h,r){
-    ctx.beginPath();
-    ctx.moveTo(x+r,y);
-    ctx.arcTo(x+w,y,x+w,y+h,r);
-    ctx.arcTo(x+w,y+h,x,y+h,r);
-    ctx.arcTo(x,y+h,x,y,r);
-    ctx.arcTo(x,y,x+w,y,r);
-    ctx.closePath();
   }
 
-  // ---------- Stats panel ----------
+  /* ---------- stats ---------- */
   function fmtClock(min){
-    const day = Math.floor(min/1440)+1;
-    const m = Math.floor(min)%1440;
-    const hh = String(Math.floor(m/60)).padStart(2,"0");
-    const mm = String(m%60).padStart(2,"0");
-    return "Day "+day+" · "+hh+":"+mm;
+    var day = Math.floor(min/1440)+1, m = Math.floor(min)%1440;
+    return "Day " + day + " · " +
+      String(Math.floor(m/60)).padStart(2,"0") + ":" + String(m%60).padStart(2,"0");
   }
 
-  const resDefs = [
-    {key:"triage", label:"Triage nurses", capKey:"triage"},
-    {key:"doctors", label:"Doctors", capKey:"doctors"},
-    {key:"p1", label:"P1 resus bays", capKey:"p1"},
-    {key:"p2", label:"P2 zone", capKey:"p2"},
-    {key:"p3", label:"P3 zone", capKey:"p3"},
-    {key:"board", label:"Boarding slots", capKey:"board"},
+  var resDefs = [
+    { key:"triage",  label:"Triage nurses",        capKey:"triage" },
+    { key:"doctors", label:"Doctors",              capKey:"doctors" },
+    { key:"p1",      label:"P1 Resuscitation Bay", capKey:"p1" },
+    { key:"p2",      label:"P2 Management Zone",   capKey:"p2" },
+    { key:"p3",      label:"P3 Ambulatory zone",   capKey:"p3" },
+    { key:"board",   label:"Boarding slots",       capKey:"board" }
   ];
   function renderResbars(){
-    const container = el("resbars");
+    var container = el("resbars");
     container.innerHTML = "";
-    for (const r of resDefs){
-      const used = occ[r.key];
-      const capacity = cap[r.capKey];
-      const pct = Math.min(100, (used/capacity)*100);
-      const cls = pct>90 ? "crit" : pct>70 ? "warn" : "";
-      const div = document.createElement("div");
+    resDefs.forEach(function(r){
+      var used = occ[r.key], capacity = cap[r.capKey];
+      var pct = capacity > 0 ? Math.min(100, (used/capacity)*100) : 0;
+      var cls = pct > 90 ? "crit" : pct > 70 ? "warn" : "";
+      var div = document.createElement("div");
       div.className = "resbar";
-      div.innerHTML = `<div class="rlabel"><span>${r.label}</span><span class="n">${used}/${capacity}</span></div>
-        <div class="track"><div class="fill ${cls}" style="width:${pct}%"></div></div>`;
+      div.innerHTML =
+        '<div class="rlabel"><span>' + r.label + '</span>' +
+        '<span class="n">' + used + ' / ' + capacity + '</span></div>' +
+        '<div class="track"><div class="fill ' + cls + '" style="width:' + pct + '%"></div></div>';
       container.appendChild(div);
-    }
+    });
   }
 
   function renderWaits(){
-    const tbody = el("waitsBody");
-    const cutoff = simMin - 360;
-    const recent = history.filter(h => h.t >= cutoff);
-    const rows = [];
-    for (const acu of ["P1","P2","P3"]){
-      const vals = recent.filter(h=>h.acuity===acu).map(h=>h.wait).sort((a,b)=>a-b);
-      if (!vals.length){
-        rows.push(`<tr><td><span class="acuitychip"><span class="dot" style="background:var(--${acu.toLowerCase()})"></span>${acu}</span></td><td>&mdash;</td><td>&mdash;</td><td>0</td></tr>`);
-        continue;
+    var tbody = el("waitsBody");
+    var cutoff = simMin - 360;
+    var recent = history.filter(function(h){ return h.t >= cutoff; });
+    var rows = [];
+    ["P1","P2","P3"].forEach(function(acu){
+      var vals = recent.filter(function(h){ return h.acuity === acu; })
+                       .map(function(h){ return h.wait; })
+                       .sort(function(a,b){ return a-b; });
+      var chip = '<span class="acuitychip"><span class="dot" style="background:var(--' +
+                 acu.toLowerCase() + ')"></span>' + acu + '</span>';
+      if(!vals.length){
+        rows.push("<tr><td>" + chip + "</td><td>&mdash;</td><td>&mdash;</td><td>0</td></tr>");
+        return;
       }
-      const median = vals[Math.floor(vals.length*0.5)];
-      const p90 = vals[Math.floor(vals.length*0.9)];
-      rows.push(`<tr><td><span class="acuitychip"><span class="dot" style="background:var(--${acu.toLowerCase()})"></span>${acu}</span></td><td>${median.toFixed(0)}m</td><td>${p90.toFixed(0)}m</td><td>${vals.length}</td></tr>`);
-    }
+      var median = vals[Math.floor(vals.length*0.5)];
+      var p90 = vals[Math.floor(vals.length*0.9)];
+      rows.push("<tr><td>" + chip + "</td><td>" + median.toFixed(0) + "m</td><td>" +
+                p90.toFixed(0) + "m</td><td>" + vals.length + "</td></tr>");
+    });
     tbody.innerHTML = rows.join("");
 
-    // KPI: overall median wait (all acuities, recent)
-    const allVals = recent.map(h=>h.wait).sort((a,b)=>a-b);
-    el("kpi-medwait").innerHTML = allVals.length ? allVals[Math.floor(allVals.length*0.5)].toFixed(0)+"<small>min</small>" : "&mdash;";
+    var allVals = recent.map(function(h){ return h.wait; }).sort(function(a,b){ return a-b; });
+    el("kpi-medwait").innerHTML = allVals.length
+      ? allVals[Math.floor(allVals.length*0.5)].toFixed(0) + "<small>min</small>"
+      : "&mdash;";
   }
 
-  let flashTimer = null;
   function checkFlash(){
-    const longest = Math.max(qTriage.length, qZone.P1.length, qZone.P2.length, qZone.P3.length, qBoard.length);
-    const flashEl = el("flashMsg");
-    if (longest > 15){
-      flashEl.classList.add("show");
-    } else {
-      flashEl.classList.remove("show");
-    }
+    var longest = Math.max(qTriage.length, qZone.P1.length, qZone.P2.length,
+                           qZone.P3.length, qBoard.length);
+    el("flashMsg").classList.toggle("show", longest > 15);
     el("kpi-queue").textContent = longest;
   }
 
@@ -804,63 +720,80 @@
     checkFlash();
   }
 
-  // ---------- Main loop ----------
-  let lastTs = null;
-  let minuteAccumulator = 0;
-  function loop(ts){
-    if (lastTs === null) lastTs = ts;
-    const dtSec = Math.min(0.25,(ts-lastTs)/1000);
-    lastTs = ts;
-    if (playing){
-      minuteAccumulator += dtSec*speed;
-      let steps = Math.floor(minuteAccumulator);
-      steps = Math.min(steps, 240); // cap catch-up per frame
-      minuteAccumulator -= steps;
-      for (let i=0;i<steps;i++) stepMinute();
+  /* ---------- export ---------- */
+  function exportRun(){
+    var s = NUHS.loadSettings();
+    var cutoff = simMin - 360;
+    var recent = history.filter(function(h){ return h.t >= cutoff; });
+    function stat(acu){
+      var vals = recent.filter(function(h){ return acu ? h.acuity === acu : true; })
+                       .map(function(h){ return h.wait; }).sort(function(a,b){ return a-b; });
+      if(!vals.length) return { n:0, medianMin:null, p90Min:null };
+      return { n:vals.length,
+               medianMin: Math.round(vals[Math.floor(vals.length*0.5)]),
+               p90Min:    Math.round(vals[Math.floor(vals.length*0.9)]) };
     }
-    resizeCanvasIfNeeded();
+    var data = {
+      kind: "ed-flow-simulation-run", version: 1,
+      exportedAt: new Date().toISOString(),
+      settings: s,
+      simulatedMinutes: Math.round(simMin),
+      capacities: Object.assign({}, cap),
+      occupancy: Object.assign({}, occ),
+      inDepartment: patients.length,
+      arrivalsToday: arrivalsToday,
+      rollingWait6h: { overall: stat(null), P1: stat("P1"), P2: stat("P2"), P3: stat("P3") }
+    };
+    var blob = new Blob([JSON.stringify(data,null,2)], { type:"application/json" });
+    NUHS.downloadBlob(blob, NUHS.slug(s.department, "ed-flow") + "-run.json");
+    NUHS.toast("Run exported");
+  }
+
+  /* ---------- main loop ---------- */
+  var lastTs = null, minuteAccumulator = 0;
+  function loop(ts){
+    if(lastTs === null) lastTs = ts;
+    var dtSec = Math.min(0.25, (ts - lastTs)/1000);
+    lastTs = ts;
+    if(playing){
+      minuteAccumulator += dtSec * speed;
+      var steps = Math.min(Math.floor(minuteAccumulator), 240);
+      minuteAccumulator -= steps;
+      for(var i=0;i<steps;i++) stepMinute();
+    }
     draw();
     renderStats();
     requestAnimationFrame(loop);
   }
 
-  let lastWidth = 0;
-  function resizeCanvasIfNeeded(){
-    const w = canvas.getBoundingClientRect().width;
-    if (Math.abs(w-lastWidth) > 1){
-      lastWidth = w;
-      resizeCanvas();
-    }
-  }
-
-  // theme change may swap css var values used in canvas
-  const mq = window.matchMedia("(prefers-color-scheme: dark)");
-  mq.addEventListener("change", invalidateCssCache);
-
-  // ---------- Load params.json, then start ----------
-  async function init(){
-    try{
-      const res = await fetch("params.json", {cache:"no-store"});
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      const data = await res.json();
-      validateParams(data);
-      P = data;
-      resetSim();
-      resizeCanvas();
-      el("loadOverlay").classList.add("hidden");
-      requestAnimationFrame(loop);
-    } catch(err){
-      const box = el("loadBoxText");
-      box.parentElement.classList.add("error");
-      box.innerHTML =
-        "Couldn't load <code>params.json</code> (" + err.message + ").<br><br>" +
-        "If you opened this file directly (double-click / <code>file://</code>), " +
-        "browsers block local JSON fetches for security. Instead, serve this folder " +
-        "over a tiny local server and open it via <code>http://</code>:<br><br>" +
-        "<code>python3 -m http.server 8000</code><br>then visit " +
-        "<code>http://localhost:8000/ed_flow_sim.html</code><br><br>" +
-        "Make sure <code>params.json</code> sits in the same folder as this HTML file.";
-    }
+  /* ---------- boot ---------- */
+  function init(){
+    loadCaps();
+    fetch("params.json", { cache:"no-store" })
+      .then(function(res){
+        if(!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .then(function(data){
+        validateParams(data);
+        P = data;
+        resetSim();
+        resizeCanvas();
+        el("loadOverlay").classList.add("hidden");
+        requestAnimationFrame(loop);
+      })
+      .catch(function(err){
+        var box = el("loadBoxText");
+        box.parentElement.classList.add("error");
+        box.innerHTML =
+          "Couldn't load <code>params.json</code> (" + err.message + ").<br><br>" +
+          "If you opened this file directly (double-click / <code>file://</code>), " +
+          "browsers block local JSON fetches for security. Serve this folder over a " +
+          "tiny local server and open it via <code>http://</code>:<br><br>" +
+          "<code>python3 -m http.server 8000</code><br>then visit " +
+          "<code>http://localhost:8000/ed_flow_sim.html</code><br><br>" +
+          "Make sure <code>params.json</code> sits in the same folder as this HTML file.";
+      });
   }
   init();
 })();

@@ -977,12 +977,17 @@
   /* ---------- drawbar ---------- */
   function showDrawbar(kind, shape){
     var bar = $("#drawbar"), a = $("#draw-a"), b = $("#draw-b"),
-        fin = $("#draw-fin"), steps = $("#draw-steps");
+        fin = $("#draw-fin"), steps = $("#draw-steps"), foot = $("#draw-foot");
     bar.hidden = false;
     bar.classList.remove("stack");
     steps.hidden = true;
+    foot.hidden = true;
     fin.hidden = true;
     fin.innerHTML = FINISH_LABEL;
+    // default home is the head row, inline with the other options
+    if(fin.parentNode !== bar.querySelector(".head")){
+      bar.querySelector(".head").insertBefore(fin, $("#draw-x"));
+    }
     if(kind === "zone"){
       $("#draw-title").textContent = "Add Zone";
       a.hidden = false; b.hidden = false;
@@ -1017,6 +1022,10 @@
         '1. Click on node to start<br>' +
         '2. Click to add next destination<br>' +
         '3. Double click or click button to finish';
+      // on a route the button reads as the last step, so it sits under the
+      // instructions rather than inline with the title
+      foot.hidden = false;
+      foot.appendChild(fin);
       fin.hidden = false;
       fin.onclick = function(){
         if(draft && draft.stops.length >= 2) finishRoute();

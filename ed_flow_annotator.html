@@ -87,6 +87,8 @@
 }
 .drawbar .steps b{color:var(--text); font-weight:600}
 .drawbar .head{display:flex; align-items:center; gap:10px}
+.drawbar .foot{display:flex; justify-content:center; padding-top:2px}
+.drawbar .foot .opt{min-width:132px; justify-content:center}
 .drawbar.stack{flex-direction:column; align-items:stretch; gap:8px; padding:12px 14px}
 .drawbar.stack .head{justify-content:space-between; gap:14px}
 
@@ -350,6 +352,7 @@
             <button class="opt cancel" id="draw-x" type="button" title="Cancel">&times;</button>
           </div>
           <p class="steps" id="draw-steps" hidden></p>
+          <div class="foot" id="draw-foot" hidden></div>
         </div>
 
         <div class="coach" id="coach" hidden>

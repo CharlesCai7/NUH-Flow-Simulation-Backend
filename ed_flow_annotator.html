@@ -43,7 +43,7 @@
 .vbtn:hover{background:var(--panel-raised); color:var(--text)}
 .vbtn.active{background:rgba(26,131,212,.2); border-color:var(--nuhs-blue); color:var(--text)}
 .vbtn svg{width:16px; height:16px; display:block}
-.viewbar .zoom{width:120px; margin:0 2px}
+.viewbar .zoom{width:130px; margin:0 2px}
 .viewbar .sep{width:1px; height:22px; background:var(--border); margin:0 2px}
 
 /* eye dropdown */
@@ -81,6 +81,7 @@
 .drawbar .opt:disabled{opacity:.4; cursor:default}
 .drawbar .opt svg{width:15px; height:15px}
 .drawbar .cancel{width:32px; padding:0; justify-content:center}
+.drawbar .collapse{width:32px; padding:0; justify-content:center}
 .drawbar .steps{
   font:400 12px/1.65 var(--ui); color:var(--text-dim); text-align:left; margin:0;
   padding-left:2px; white-space:nowrap;
@@ -90,7 +91,9 @@
 .drawbar .foot{display:flex; justify-content:center; padding-top:2px}
 .drawbar .foot .opt{min-width:132px; justify-content:center}
 .drawbar.stack{flex-direction:column; align-items:stretch; gap:8px; padding:12px 14px}
-.drawbar.stack .head{justify-content:space-between; gap:14px}
+.drawbar.stack .head{gap:8px}
+.drawbar.stack .title{margin-right:auto}
+.drawbar.stack.collapsed{gap:6px}
 
 /* step coach */
 .coach{
@@ -122,6 +125,32 @@
 }
 .emptybox .row{display:flex; gap:10px}
 .emptybox .row .btn{flex:1}
+
+/* file manager */
+.filepanel{flex:1; min-height:0; overflow:auto; padding:24px}
+.filepanel h2{font-size:24px; font-weight:600; margin-bottom:6px}
+.filepanel .intro{color:var(--text-dim); margin:0 0 18px; font-size:13.5px}
+.filetable{width:100%; border-collapse:collapse; font-size:13px}
+.filetable th{
+  text-align:left; color:var(--text-dim); font:700 11px/1 var(--ui);
+  letter-spacing:.08em; text-transform:uppercase; padding:10px 10px;
+  border-bottom:1px solid var(--border);
+}
+.filetable td{padding:10px; border-bottom:1px solid var(--border-soft); vertical-align:middle}
+.filetable .mono{font-size:12px}
+.filetable .actions{display:flex; justify-content:flex-end; gap:8px; white-space:nowrap}
+.filetable .iconbtn{width:34px; height:34px; padding:0; border-radius:50%; font-weight:700}
+.filetable .emptycell{color:var(--text-faint); padding:22px 10px}
+.filetable .danger{color:var(--p1)}
+.notes-modal .box{position:relative}
+.notes-modal .close{
+  position:absolute; top:14px; right:14px; width:32px; height:32px; padding:0;
+  border-radius:50%; font-size:20px; line-height:1;
+}
+.notes-modal .notebody{
+  color:var(--text-dim); white-space:pre-wrap; margin:0; font-size:13.5px;
+  line-height:1.55;
+}
 
 /* HUD */
 .hud{
@@ -213,10 +242,53 @@
 .secrow .lbl{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .secrow input{width:64px; flex:none; padding:5px 7px; font-family:var(--mono);
   font-size:12px; text-align:right}
+.secrow .dash{width:64px; flex:none; text-align:right; font-family:var(--mono)}
 .secrow.total{border-top:1px solid var(--border); color:var(--text); font-weight:600;
   font-family:var(--mono); padding-top:11px}
+.simtoggle{
+  display:flex; align-items:center; justify-content:space-between; gap:14px;
+  padding:2px 0 14px; margin-bottom:12px; border-bottom:1px solid var(--border-soft);
+  color:var(--text); cursor:pointer;
+}
+.simtoggle input{
+  position:absolute; opacity:0; pointer-events:none;
+}
+.simtoggle .simtext{
+  font:700 15px/1.2 var(--ui); color:var(--text); letter-spacing:0;
+}
+.simtoggle .switch{
+  width:50px; height:28px; flex:none; border-radius:999px; padding:2px;
+  background:var(--border); box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);
+  transition:background .18s ease;
+}
+.simtoggle .switch::before{
+  content:""; display:block; width:24px; height:24px; border-radius:50%;
+  background:#FFFFFF; box-shadow:0 2px 5px rgba(0,0,0,.35);
+  transition:transform .18s ease;
+}
+.simtoggle input:checked + .simtext + .switch{
+  background:var(--nuhs-blue);
+}
+.simtoggle input:checked + .simtext + .switch::before{
+  transform:translateX(22px);
+}
+.simtoggle input:focus-visible + .simtext + .switch{
+  outline:2px solid var(--nuhs-cyan); outline-offset:2px;
+}
+.stepper{display:grid; grid-template-columns:42px 1fr 42px; gap:8px; align-items:center}
+.stepper .iconbtn{height:36px; padding:0; font-size:20px; line-height:1}
+.stepper input{text-align:center}
+.seg{
+  display:grid; grid-template-columns:1fr 1fr; gap:3px; padding:3px;
+  background:#0A1A2C; border:1px solid var(--border); border-radius:7px;
+}
+.seg button{
+  border:0; border-radius:5px; padding:8px 6px; cursor:pointer; color:var(--text-dim);
+  background:transparent; font:600 12px/1 var(--ui);
+}
+.seg button.active{background:var(--panel-raised); color:var(--text); box-shadow:0 0 0 1px var(--border)}
 
-/* ---------- roles grid ---------- */
+/* ---------- roles grid (disabled) ----------
 .rolesgrid{
   display:grid; grid-template-columns:repeat(3,1fr); gap:16px; padding:24px;
   align-content:start; overflow:auto; flex:1; min-height:0;
@@ -233,6 +305,7 @@
 .rolecard .glyph{width:88px; height:88px; flex:none}
 .rolecard .nm{font-size:16px; font-weight:700}
 .rolecard .ct{font-family:var(--mono); font-size:13px; color:var(--nuhs-cyan)}
+---------- end disabled roles grid ---------- */
 
 /* tinted PNG glyphs: the assets are white on transparent, so mask them */
 .glyph{
@@ -245,7 +318,9 @@
 /* settings screen reuses the shell modal; nothing extra needed */
 
 @media (max-width:1180px){
+  /*
   .rolesgrid{grid-template-columns:repeat(2,1fr)}
+  */
 }
 </style>
 </head>
@@ -270,12 +345,14 @@
               <circle cx="3" cy="17" r="1.8" fill="currentColor" stroke="none"/></svg></span>
             Edit Routes
           </button>
+          <!-- Edit Roles is disabled for now; fixed role colors/icons remain available to routes.
           <button class="tool" id="t-roles" data-mode="roles" type="button" disabled>
             <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
               stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.4"/>
               <path d="M5 20c0-3.6 3.1-6 7-6s7 2.4 7 6"/></svg></span>
             Edit Roles
           </button>
+          -->
           <button class="tool" id="t-scale" data-mode="scale" type="button" disabled>
             <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
               stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h18"/><path d="M3 8v8"/>
@@ -301,6 +378,10 @@
           Scale not set &mdash; distances shown in pixels.
         </div>
       </div>
+
+      <div class="panel pad">
+        <button class="btn wide" id="btn-file-manager" type="button">File Manager</button>
+      </div>
     </aside>
 
     <main class="stage">
@@ -320,7 +401,7 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
               <circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6M8 11h6"/></svg>
           </button>
-          <input type="range" class="zoom" id="v-zoom" min="50" max="200" value="100" aria-label="Zoom">
+          <input type="range" class="zoom" id="v-zoom" min="15" max="200" value="100" aria-label="Zoom">
           <button class="vbtn" id="v-zoomin" title="Zoom in" type="button">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
               <circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6M8 11h6M11 8v6"/></svg>
@@ -349,6 +430,10 @@
             <button class="opt" id="draw-a" type="button"></button>
             <button class="opt" id="draw-b" type="button"></button>
             <button class="opt" id="draw-fin" type="button"></button>
+            <button class="opt collapse" id="draw-collapse" type="button" title="Collapse instructions" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+                stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg>
+            </button>
             <button class="opt cancel" id="draw-x" type="button" title="Cancel">&times;</button>
           </div>
           <p class="steps" id="draw-steps" hidden></p>
@@ -356,7 +441,7 @@
         </div>
 
         <div class="coach" id="coach" hidden>
-          <p class="eyebrow" id="coach-eyebrow">Step 1 of 4</p>
+          <p class="eyebrow" id="coach-eyebrow">Step 1 of 3</p>
           <h3 id="coach-title">Add a zone</h3>
           <p id="coach-body"></p>
           <div class="row">
@@ -385,7 +470,28 @@
         </div>
       </section>
 
+      <!-- Roles mode grid disabled for now; route role pickers still use fixed role definitions.
       <div class="rolesgrid panel" id="rolesgrid" hidden></div>
+      -->
+      <section class="panel filepanel" id="filemanager" hidden>
+        <h2>File Manager</h2>
+        <p class="intro">Load and manage existing authored floor plans.</p>
+        <table class="filetable">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Department</th>
+              <th>Observed by</th>
+              <th>Date</th>
+              <th>Last Modified</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="filemanager-rows">
+            <tr><td class="emptycell" colspan="6">Loading files...</td></tr>
+          </tbody>
+        </table>
+      </section>
     </main>
 
     <aside class="rail-r" id="railr">
@@ -411,9 +517,9 @@
 </div>
 
 <input type="file" id="fileInput" accept="image/*" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none">
-<input type="file" id="importInput" accept="application/json,.json" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none">
+<input type="file" id="importInput" accept="application/json,.json,application/zip,application/x-zip-compressed,.zip" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none">
 
-<script src="nuhs-shell.js"></script>
-<script src="plan.js"></script>
+<script src="nuhs-shell.js?v=20260905-files2"></script>
+<script src="plan.js?v=20260905-files2"></script>
 </body>
 </html>

@@ -16,9 +16,10 @@ Arrival -> Condition of Concern -> Triage -> P1 / P2 / P3 zone
 A third program, `ed_simulation.py`, runs the same simulation headlessly for
 batch runs and capacity sweeps.
 
-> **PLAN and SIMULATE are not yet wired together.** PLAN's zone capacities,
-> role staffing and route durations are stored and exported, but nothing feeds
-> them into the simulation — SIMULATE runs purely off `params.json`.
+> **PLAN and SIMULATE are not yet wired together.** PLAN's zone capacities and
+> route durations are stored and exported, but nothing feeds them into the
+> simulation — SIMULATE runs purely off `params.json`. Role staffing remains
+> fixed legacy metadata and does not drive PLAN-side route animation.
 
 ---
 
@@ -26,7 +27,7 @@ batch runs and capacity sweeps.
 
 Both pages expect to be served over HTTP. Opening them by double-click
 (`file://`) does not work properly: SIMULATE will not start at all, and PLAN's
-PNG export fails. From the repository root:
+WebP export fails. From the repository root:
 
 ```bash
 python3 -m http.server 8000
@@ -50,7 +51,7 @@ have. Nothing is compiled and there is no build step.
 
 - SIMULATE fetches `params.json` at startup; browsers block `fetch()` from
   `file://` for security. The page detects this and tells you what to do.
-- PLAN's PNG export draws the floorplan into a canvas. Under `file://` the
+- PLAN's WebP export draws the floorplan into a canvas. Under `file://` the
   canvas is treated as cross-origin and the export throws.
 
 ---
@@ -94,18 +95,22 @@ on a double-click. Each zone carries a name, colour and capacity.
 defaults to the colour of the zone it lands in, and its zone is detected
 automatically.
 
-**Routes** — chain nodes together. Click a node to start, click each next node
-and give the leg a duration, then double-click the last node to finish and set
-the label and role. Only nodes are clickable; a route takes the colour of the
-role that walks it.
+**Routes** — click the canvas to place route-only waypoints. Two waypoints make
+one segment. Clicking a zone or node marks that waypoint as a section
+destination and asks for dwell time there; a final open section can end on the
+floorplan and carries no dwell. Double-click, or use **Finish** once at least
+two points are placed, then set the route label, role and number of agents.
+Selecting a route shows draggable waypoint handles. **Simulate Route** animates
+role icons along the route inside PLAN; ping-pong routes reverse at the ends,
+and loop routes return to their start.
 
-**Roles** — six fixed roles (Doctor, Nurse, Consultant, Patient, Porter, Other).
-Each can be renamed and given a staffing number and colour. Patient's number is
-arrivals per day, not staff.
+**Roles** — six fixed roles (Doctor, Nurse, Consultant, Patient, Porter, Other)
+provide stable labels, colours and icons for routes. The former Edit Roles panel
+is currently disabled, so staffing is not editable in PLAN.
 
 **Scale** — draw a line over a known distance and enter its length in metres.
-Distances then read in metres and a scale bar appears on the map and in the PNG
-export. Without it, distances stay in pixels.
+Distances then read in metres and a scale bar appears on the map and in the
+annotated plan export. Without it, distances stay in pixels.
 
 ### Keyboard
 
@@ -121,9 +126,23 @@ export. Without it, distances stay in pixels.
 ### Saving and files
 
 PLAN autosaves to browser storage as you work and restores on reload. **Save**
-forces a write; **Export** writes a `.json` plan; **Import** reads one back and
-also upgrades files from the previous annotator format. **PNG** exports the
-annotated floorplan at the image's native resolution.
+forces a write to the PLAN File Manager in Cloud Firestore. Settings include a
+Filename field; saving with the same filename updates the current File Manager
+record by filename, while changing the filename creates a new record on the
+next **Save**.
+Firestore saves keep the embedded `map.dataUrl` image data so a saved floorplan
+can be restored.
+
+**Export** opens a dialog for the filename and whether to include the
+floorplan. Without the floorplan checkbox it writes `Filename.json` without
+embedded image data. With the checkbox it writes `Filename.zip`, containing
+`Filename.json`, the original floorplan converted to WebP using the floorplan's
+filename, and `annotated plan.webp` with zones, nodes and routes drawn on top.
+**Import** reads either a JSON plan or a ZIP containing a JSON plan plus a
+floorplan image (`.png`, `.jpg`, `.jpeg`, or `.webp`).
+
+**File Manager** opens in the main PLAN work area and lists authored floor
+plans from the Firestore `planFiles` collection with Load and Delete actions.
 
 Browser storage is per-browser and per-origin — it does not travel between
 machines. Use Export for anything you want to keep or share.
@@ -156,8 +175,8 @@ A `queue backing up` badge appears when any single queue passes 15 waiting
 patients.
 
 **Export** writes a JSON snapshot of the run — capacities, occupancy and the
-rolling wait statistics. Import and PNG are Plan-side actions and stay disabled
-here.
+rolling wait statistics. Import and image export are Plan-side actions and stay
+disabled here.
 
 ---
 
@@ -219,10 +238,39 @@ the system never reaches steady state).
 
 ## 4. Deploying to Firebase Hosting
 
-The app is static, so Hosting serves it as-is. **You do not need the Firebase JS
-SDK** — that is only for calling Firebase services such as Analytics or Auth
-from the page, and this app calls none of them. Skip the "Add Firebase SDK" step
-in the console.
+The app is static, so Hosting serves it as-is. PLAN's File Manager uses Cloud
+Firestore through Firebase Hosting's reserved SDK URLs, so create/enable a
+Firestore database for the Firebase project before relying on File Manager.
+
+To enable File Manager:
+
+1. In Firebase Console, open project `i3dg-ea47b`.
+2. Go to **Build > Firestore Database** and create a database if one does not
+   already exist.
+3. Choose a database location, then start in production mode.
+4. Open the Firestore **Rules** tab and publish rules that allow the deployed
+   web app to read/write the `planFiles` collection. This app does not yet have
+   Firebase Authentication, so any direct client-side write rule is public; use
+   a temporary prototype rule only for restricted demos, or add Auth before
+   broader release.
+5. Deploy Hosting again so clients receive the latest File Manager code:
+
+```bash
+firebase deploy --only hosting
+```
+
+Temporary prototype rule:
+
+```js
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /planFiles/{fileId} {
+      allow read, write: if true;
+    }
+  }
+}
+```
 
 Hosting publishes the repository root, with an ignore list in `firebase.json`
 keeping the Python engine, the virtualenv, the working folders and every

@@ -45,6 +45,9 @@
     'stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5.5 5.5L20 7"/></svg> Finish';
 
   var LS_KEY = "nuhs-ed-plan-v1";
+  var FILE_REF_KEY = "nuhs-ed-plan-file-ref-v1";
+  var FIRESTORE_COLLECTION = "planFiles";
+  var FIREBASE_SDK_VERSION = "8.10.1";
 
   /* ---------- state ---------- */
   var state = {
@@ -55,18 +58,24 @@
     roles: ROLE_DEFS.map(function(r){ return Object.assign({}, r); }),
     layers:{ zones:true, nodes:true, routes:true, grid:false },
     view:{ k:1, x:0, y:0 },
-    mode:"zones",             // zones | routes | roles
+    mode:"zones",             // zones | routes
     listTab:"zones",          // zones | nodes
     selectedId:null,
     hoverId:null,
     selectedRole:"doctor",
-    stepsDone:{ zone:false, node:false, route:false, roles:false },
-    coachStep:0               // 0 = not running, 1..4
+    stepsDone:{ zone:false, node:false, route:false /*, roles:false */ },
+    coachStep:0               // 0 = not running, 1..3
   };
 
   var img = null;             // HTMLImageElement of the floorplan
   var tool = "select";        // select | pan
   var draft = null;           // in-progress drawing
+  var roleIconImages = {};
+  var routeAgents = [];
+  var simLastTs = null;
+  var activeImportModal = null;
+  var currentFileRef = { id:null, filename:null };
+  var firestorePromise = null;
 
   /* ---------- geometry helpers ---------- */
   function metersPerPixel(){
@@ -107,22 +116,34 @@
   function routeById(id){ return state.routes.find(function(r){ return r.id===id; }) || null; }
   function roleById(id){ return state.roles.find(function(r){ return r.id===id; }) || state.roles[0]; }
 
-  function stopPoint(s){
-    if(s.targetType === "node"){ var n = nodeById(s.targetId); if(n) return {x:n.x, y:n.y}; }
-    else { var z = zoneById(s.targetId); if(z) return polyCentroid(z.pts); }
-    return { x:s.x||0, y:s.y||0 };
+  function destinationLabel(destination){
+    if(!destination) return "End";
+    if(destination.targetType === "node"){
+      var n = nodeById(destination.targetId);
+      return n ? n.name : "(deleted node)";
+    }
+    var z = zoneById(destination.targetId);
+    return z ? z.name : "(deleted zone)";
   }
-  function stopLabel(s){
-    if(s.targetType === "node"){ var n = nodeById(s.targetId); return n ? n.name : "(deleted node)"; }
-    var z = zoneById(s.targetId); return z ? z.name : "(deleted zone)";
+  function routeSections(r){ return r.sections || legacyStopsToSections(r.stops || []); }
+  function sectionAcceptsDwell(section){ return !!section.destination; }
+  function routeAllPoints(r){
+    return routeSections(r).reduce(function(points, section){
+      return points.concat((section.waypoints || []).map(function(p){
+        return { x:Number(p.x)||0, y:Number(p.y)||0 };
+      }));
+    }, []);
   }
   function routeTotalMin(r){
-    return r.stops.reduce(function(sum,s,i){ return i===0 ? 0 : sum + (Number(s.waitMin)||0); }, 0);
+    return routeSections(r).reduce(function(sum, section){
+      return sum + (sectionAcceptsDwell(section) ? (Number(section.dwellMin)||0) : 0);
+    }, 0);
   }
   function routePixels(r){
-    var d = 0;
-    for(var i=1;i<r.stops.length;i++){
-      var a = stopPoint(r.stops[i-1]), b = stopPoint(r.stops[i]);
+    var pts = routeAllPoints(r), d = 0;
+    for(var i=1;i<pts.length;i++) d += Math.hypot(pts[i].x-pts[i-1].x, pts[i].y-pts[i-1].y);
+    if(r.isLoop && pts.length > 2){
+      var a = pts[pts.length-1], b = pts[0];
       d += Math.hypot(b.x-a.x, b.y-a.y);
     }
     return d;
@@ -149,6 +170,75 @@
       if(d < bestD){ bestD = d; best = z; }
     });
     return best ? best.id : null;
+  }
+  function targetPoint(destination){
+    if(!destination) return null;
+    if(destination.targetType === "node"){
+      var n = nodeById(destination.targetId);
+      return n ? { x:n.x, y:n.y } : null;
+    }
+    var z = zoneById(destination.targetId);
+    return z ? polyCentroid(z.pts) : null;
+  }
+  function legacyStopsToSections(stops){
+    var sections = [];
+    if(!stops || stops.length < 2) return sections;
+    for(var i=1;i<stops.length;i++){
+      var a = targetPoint(stops[i-1]) || { x:stops[i-1].x||0, y:stops[i-1].y||0 };
+      var b = targetPoint(stops[i]) || { x:stops[i].x||0, y:stops[i].y||0 };
+      sections.push({
+        id: uid("sec_"),
+        waypoints: i === 1 ? [a, b] : [b],
+        destination: { targetType:stops[i].targetType || "node", targetId:stops[i].targetId },
+        dwellMin: Number(stops[i].waitMin)||0
+      });
+    }
+    return sections;
+  }
+  function sectionLabel(sections, index){
+    var from = index === 0 ? "Start" : destinationLabel(sections[index-1].destination);
+    return from + " to " + destinationLabel(sections[index].destination);
+  }
+  function sectionPixels(sections, index){
+    var pts = (sections[index].waypoints || []).slice(), d = 0;
+    if(index > 0){
+      var prev = sections[index-1].waypoints || [];
+      if(prev.length) pts.unshift(prev[prev.length-1]);
+    }
+    for(var i=1;i<pts.length;i++) d += Math.hypot(pts[i].x-pts[i-1].x, pts[i].y-pts[i-1].y);
+    return d;
+  }
+  function routePolyline(r){
+    var pts = routeAllPoints(r);
+    if(r.isLoop && pts.length > 2) pts = pts.concat([{ x:pts[0].x, y:pts[0].y }]);
+    if(pts.length < 2) return null;
+    var cumulative = [0], total = 0;
+    for(var i=1;i<pts.length;i++){
+      total += Math.hypot(pts[i].x-pts[i-1].x, pts[i].y-pts[i-1].y);
+      cumulative.push(total);
+    }
+    if(total <= 0) return null;
+    var stops = [], waypointIndex = 0, sections = routeSections(r);
+    sections.forEach(function(section){
+      waypointIndex += (section.waypoints || []).length;
+      var pointIndex = waypointIndex - 1;
+      if(sectionAcceptsDwell(section) && Number(section.dwellMin) > 0 && cumulative[pointIndex] != null){
+        stops.push({ distance:cumulative[pointIndex], seconds:Number(section.dwellMin) });
+      }
+    });
+    return { points:pts, cumulative:cumulative, total:total, stops:stops };
+  }
+  function pointAtDistance(poly, distance){
+    var d = Math.max(0, Math.min(poly.total, distance));
+    for(var i=1;i<poly.cumulative.length;i++){
+      if(poly.cumulative[i] >= d){
+        var span = poly.cumulative[i] - poly.cumulative[i-1];
+        var t = span ? (d - poly.cumulative[i-1]) / span : 0;
+        var a = poly.points[i-1], b = poly.points[i];
+        return { x:a.x + (b.x-a.x)*t, y:a.y + (b.y-a.y)*t };
+      }
+    }
+    return poly.points[poly.points.length-1];
   }
 
   /* ---------- canvas ---------- */
@@ -182,7 +272,7 @@
   }
   function zoomAt(sx, sy, factor){
     var before = toWorld(sx,sy);
-    state.view.k = Math.max(0.2, Math.min(4, state.view.k*factor));
+    state.view.k = Math.max(0.15, Math.min(2, state.view.k*factor));
     var after = toWorld(sx,sy);
     state.view.x += (after.x-before.x)*state.view.k;
     state.view.y += (after.y-before.y)*state.view.k;
@@ -192,7 +282,7 @@
   function setZoom(pct, anchorX, anchorY){
     var ax = anchorX == null ? cssW/2 : anchorX, ay = anchorY == null ? cssH/2 : anchorY;
     var before = toWorld(ax,ay);
-    state.view.k = Math.max(0.2, Math.min(4, pct/100));
+    state.view.k = Math.max(0.15, Math.min(2, pct/100));
     var after = toWorld(ax,ay);
     state.view.x += (after.x-before.x)*state.view.k;
     state.view.y += (after.y-before.y)*state.view.k;
@@ -249,6 +339,7 @@
     if(state.layers.routes) state.routes.forEach(drawRoute);
     if(state.layers.nodes) state.nodes.forEach(drawNode);
     if(draft) drawDraft();
+    if(state.layers.routes) drawRouteAgents();
 
     ctx.restore();
     drawScaleBar();
@@ -366,14 +457,13 @@
   }
 
   function drawRoute(r){
-    if(r.stops.length < 2) return;
+    var pts = routeAllPoints(r);
+    if(pts.length < 2) return;
     var sel = state.selectedId === r.id, hov = state.hoverId === r.id, v = state.view;
     var col = roleById(r.roleId).color;
     ctx.beginPath();
-    r.stops.forEach(function(s,i){
-      var p = stopPoint(s);
-      i ? ctx.lineTo(p.x,p.y) : ctx.moveTo(p.x,p.y);
-    });
+    pts.forEach(function(p,i){ i ? ctx.lineTo(p.x,p.y) : ctx.moveTo(p.x,p.y); });
+    if(r.isLoop && pts.length > 2) ctx.closePath();
     ctx.lineWidth = (sel ? 5 : hov ? 4.4 : 3)/v.k;
     ctx.strokeStyle = col;
     ctx.lineJoin = "round"; ctx.lineCap = "round";
@@ -381,22 +471,29 @@
     ctx.stroke();
     ctx.globalAlpha = 1;
 
-    r.stops.forEach(function(s){
-      var p = stopPoint(s);
+    var sections = routeSections(r);
+    sections.forEach(function(section){
+      var p = section.waypoints && section.waypoints.length ? section.waypoints[section.waypoints.length-1] : null;
+      if(!p) return;
       ctx.beginPath();
       ctx.arc(p.x, p.y, (sel ? 5.5 : hov ? 5.2 : 4.5)/v.k, 0, Math.PI*2);
-      ctx.fillStyle = col;
+      ctx.fillStyle = sectionAcceptsDwell(section) ? "#FFFFFF" : col;
       ctx.fill();
       ctx.lineWidth = 1.6/v.k;
-      ctx.strokeStyle = css("--command-bg");
+      ctx.strokeStyle = sectionAcceptsDwell(section) ? col : css("--command-bg");
       ctx.stroke();
     });
 
     // direction arrows at each leg midpoint
-    for(var i=1;i<r.stops.length;i++){
-      var a = stopPoint(r.stops[i-1]), b = stopPoint(r.stops[i]);
+    for(var i=1;i<pts.length;i++){
+      var a = pts[i-1], b = pts[i];
       arrow((a.x+b.x)/2, (a.y+b.y)/2, Math.atan2(b.y-a.y, b.x-a.x), (sel?8:hov?7:6)/v.k, col);
     }
+    if(r.isLoop && pts.length > 2){
+      var la = pts[pts.length-1], lb = pts[0];
+      arrow((la.x+lb.x)/2, (la.y+lb.y)/2, Math.atan2(lb.y-la.y, lb.x-la.x), (sel?8:hov?7:6)/v.k, col);
+    }
+    if(sel) drawRouteHandles(r, col);
   }
   function arrow(x,y,ang,size,col){
     ctx.save();
@@ -405,6 +502,59 @@
     ctx.moveTo(size,0); ctx.lineTo(-size*0.7, size*0.6); ctx.lineTo(-size*0.7, -size*0.6);
     ctx.closePath();
     ctx.fillStyle = col; ctx.fill();
+    ctx.restore();
+  }
+  function drawRouteHandles(r, col){
+    var v = state.view, sections = routeSections(r);
+    sections.forEach(function(section){
+      (section.waypoints || []).forEach(function(p, i){
+        var bound = sectionAcceptsDwell(section) && i === section.waypoints.length - 1;
+        var dragging = draggingWaypoint && draggingWaypoint.routeId === r.id &&
+                       draggingWaypoint.sectionId === section.id && draggingWaypoint.index === i;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, (dragging ? 9 : bound ? 7 : 6)/v.k, 0, Math.PI*2);
+        ctx.fillStyle = bound ? "#FFFFFF" : col;
+        ctx.fill();
+        ctx.lineWidth = (dragging ? 2.6 : 2.1)/v.k;
+        ctx.strokeStyle = bound ? col : "#FFFFFF";
+        ctx.stroke();
+      });
+    });
+  }
+  function drawRouteAgents(){
+    if(!routeAgents.length) return;
+    routeAgents.forEach(function(agent){
+      var r = routeById(agent.routeId);
+      var role = r && roleById(r.roleId);
+      var poly = r && routePolyline(r);
+      if(!r || !role || !poly) return;
+      drawRoleAvatar(pointAtDistance(poly, agent.distance), role);
+    });
+  }
+  function drawRoleAvatar(p, role){
+    var screen = toScreen(p.x, p.y), circle = 20, icon = 14;
+    ctx.save();
+    ctx.setTransform(window.devicePixelRatio||1, 0, 0, window.devicePixelRatio||1, 0, 0);
+    ctx.beginPath();
+    ctx.arc(screen.x, screen.y, circle/2, 0, Math.PI*2);
+    ctx.fillStyle = role.color;
+    ctx.shadowColor = "rgba(0,0,0,.35)";
+    ctx.shadowBlur = 4;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.lineWidth = 1.4;
+    ctx.strokeStyle = "#FFFFFF";
+    ctx.stroke();
+    var im = roleIconImages[role.id];
+    if(im && im.complete && im.naturalWidth){
+      ctx.drawImage(im, screen.x - icon/2, screen.y - icon/2, icon, icon);
+    } else {
+      ctx.fillStyle = "#FFFFFF";
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y - 3, 2.4, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillRect(screen.x - 3.2, screen.y, 6.4, 5);
+    }
     ctx.restore();
   }
 
@@ -486,23 +636,21 @@
     }
     else if(draft.kind === "route"){
       ctx.strokeStyle = draft.color || css("--nuhs-cyan");
-      if(draft.stops.length){
+      if(draft.points.length){
         ctx.beginPath();
-        draft.stops.forEach(function(s,i){
-          var p = stopPoint(s);
-          i ? ctx.lineTo(p.x,p.y) : ctx.moveTo(p.x,p.y);
-        });
+        draft.points.forEach(function(p,i){ i ? ctx.lineTo(p.x,p.y) : ctx.moveTo(p.x,p.y); });
         if(draft.hover){
-          var last = stopPoint(draft.stops[draft.stops.length-1]);
+          var last = draft.points[draft.points.length-1];
           ctx.moveTo(last.x,last.y); ctx.lineTo(draft.hover.x, draft.hover.y);
         }
         ctx.stroke();
         ctx.setLineDash([]);
-        draft.stops.forEach(function(s){
-          var p = stopPoint(s);
+        draft.points.forEach(function(p){
           ctx.beginPath();
           ctx.arc(p.x,p.y, 5/v.k, 0, Math.PI*2);
-          ctx.fillStyle = draft.color || css("--nuhs-cyan"); ctx.fill();
+          ctx.fillStyle = p.destination ? "#FFFFFF" : (draft.color || css("--nuhs-cyan")); ctx.fill();
+          ctx.lineWidth = 1.8/v.k;
+          ctx.strokeStyle = draft.color || css("--nuhs-cyan"); ctx.stroke();
         });
       }
     }
@@ -527,8 +675,12 @@
     if(state.layers.routes){
       for(var r=state.routes.length-1;r>=0;r--){
         var rt = state.routes[r];
-        for(var s=1;s<rt.stops.length;s++){
-          if(dist2seg(w, stopPoint(rt.stops[s-1]), stopPoint(rt.stops[s])) <= tol) return rt;
+        var pts = routeAllPoints(rt);
+        for(var s=1;s<pts.length;s++){
+          if(dist2seg(w, pts[s-1], pts[s]) <= tol) return rt;
+        }
+        if(rt.isLoop && pts.length > 2 && dist2seg(w, pts[pts.length-1], pts[0]) <= tol){
+          return rt;
         }
       }
     }
@@ -539,8 +691,6 @@
     }
     return null;
   }
-  /* Routes chain nodes only — a zone is an area, a node is the touchpoint
-     inside it that a person actually walks to. */
   function hitTarget(w){
     var tol = Math.max(18/state.view.k, 10);   // ~18 screen px, comfortable at any zoom
     var best = null, bestD = Infinity;
@@ -548,7 +698,26 @@
       var d = Math.hypot(n.x-w.x, n.y-w.y);
       if(d <= tol && d < bestD){ bestD = d; best = n; }
     });
-    return best ? { targetType:"node", targetId:best.id } : null;
+    if(best) return { targetType:"node", targetId:best.id };
+    for(var z=state.zones.length-1;z>=0;z--){
+      if(pointInPoly(w, state.zones[z].pts)) return { targetType:"zone", targetId:state.zones[z].id };
+    }
+    return null;
+  }
+  function waypointHit(w){
+    if(!state.selectedId) return null;
+    var r = routeById(state.selectedId);
+    if(!r) return null;
+    var tol = Math.max(16/state.view.k, 8), sections = routeSections(r);
+    for(var si=sections.length-1;si>=0;si--){
+      var pts = sections[si].waypoints || [];
+      for(var pi=pts.length-1;pi>=0;pi--){
+        if(Math.hypot(pts[pi].x-w.x, pts[pi].y-w.y) <= tol){
+          return { routeId:r.id, sectionId:sections[si].id, sectionIndex:si, index:pi };
+        }
+      }
+    }
+    return null;
   }
   function kindOf(o){
     if(!o) return null;
@@ -560,6 +729,7 @@
 
   /* ---------- pointer interaction ---------- */
   var panning = null, spaceDown = false;
+  var draggingWaypoint = null;
 
   canvas.addEventListener("pointerdown", function(e){
     if(!state.map) return;
@@ -568,6 +738,11 @@
 
     if(tool === "pan" || spaceDown || e.button === 1){
       panning = { sx:sp.x, sy:sp.y, vx:state.view.x, vy:state.view.y };
+      return;
+    }
+    var handle = !draft ? waypointHit(w) : null;
+    if(handle){
+      draggingWaypoint = handle;
       return;
     }
     if(draft){
@@ -579,12 +754,9 @@
         else { draft.b = w; promptScale(); }
       }
       else if(draft.kind === "route"){
+        if(e.detail > 1 || pendingSection) return;
         var t = hitTarget(w);
-        if(!t){ NUHS.toast("Click on a node", true); return; }
-        // clicking the node just placed is a no-op; double-clicking it finishes
-        var last = draft.stops[draft.stops.length-1];
-        if(last && last.targetId === t.targetId) return;
-        addRouteStop(t);
+        addRoutePoint(w, t);
       }
       requestRender();
       return;
@@ -612,21 +784,25 @@
       requestRender();
       return;
     }
+    if(draggingWaypoint){
+      moveRouteWaypoint(draggingWaypoint, w);
+      requestRender();
+      return;
+    }
     if(draft){
       if(draft.kind === "zone-rect" && draft.dragging) draft.b = w;
       else draft.hover = w;
       if(draft.kind === "route"){
-        // zones are inert while chaining a route; only nodes can be snapped to
         var t = hitTarget(w);
-        var id = t ? t.targetId : null;
+        var id = t ? t.targetType + ":" + t.targetId : null;
         if(id !== draft.snapId){ draft.snapId = id; setHover(null); }
         canvas.style.cursor = id ? "pointer" : "crosshair";
       }
       requestRender();
     } else if(tool !== "pan" && !spaceDown){
-      var hit = hitTest(w);
+      var wh = waypointHit(w), hit = hitTest(w);
       setHover(hit ? hit.id : null);
-      canvas.style.cursor = hit ? "pointer" : "default";
+      canvas.style.cursor = wh ? "grab" : hit ? "pointer" : "default";
     }
     var hx = $("#hud-extra");
     if(hx) hx.textContent = Math.round(w.x) + ", " + Math.round(w.y);
@@ -651,6 +827,14 @@
 
   canvas.addEventListener("pointerup", function(e){
     if(panning){ panning = null; return; }
+    if(draggingWaypoint){
+      var sp = evPos(e), w = toWorld(sp.x, sp.y);
+      settleRouteWaypoint(draggingWaypoint, w);
+      draggingWaypoint = null;
+      canvas.style.cursor = "default";
+      persist(); refreshRail(); requestRender();
+      return;
+    }
     if(draft && draft.kind === "zone-rect" && draft.dragging){
       draft.dragging = false;
       var a = draft.a, b = draft.b;
@@ -670,13 +854,9 @@
       return;
     }
     if(draft && draft.kind === "route"){
-      // a duration prompt opened by the first click of this double-click is
-      // still on screen; let it confirm, then finish
       if(pendingSection){ pendingSection.finishAfter = true; return; }
-      var sp = evPos(e), t = hitTarget(toWorld(sp.x, sp.y));
-      var last = draft.stops[draft.stops.length-1];
-      if(draft.stops.length >= 2 && (!t || !last || t.targetId === last.targetId)) finishRoute();
-      else if(draft.stops.length < 2) NUHS.toast("A route needs at least two nodes", true);
+      if(draft.points.length >= 2) finishRoute();
+      else NUHS.toast("A route needs at least two points", true);
     }
   });
 
@@ -840,25 +1020,25 @@
   var pendingSection = null;   // duration prompt currently open
 
   function startRoute(){
-    draft = { kind:"route", stops:[], color:roleById(state.roles[0].id).color };
+    draft = { kind:"route", points:[], color:roleById(state.roles[0].id).color };
     pendingSection = null;
     showDrawbar("route");
     setCursor();
     requestRender();
   }
 
-  function addRouteStop(t){
-    if(draft.stops.length === 0){
-      // the first click only establishes where the route starts
-      draft.stops.push({ targetType:t.targetType, targetId:t.targetId, waitMin:0 });
+  function addRoutePoint(w, t){
+    if(!t){
+      draft.points.push({ x:w.x, y:w.y, destination:null, dwellMin:0 });
       updateDrawbar();
       requestRender();
       return;
     }
+    var name = destinationLabel(t);
     var pop = popover(
-      '<h3>Section duration</h3>' +
-      '<label class="field" style="margin-bottom:0"><span>Wait duration (minutes)</span>' +
-        '<input type="number" id="sd-min" class="num" min="0" step="1" value="5"></label>' +
+      '<h3>Arrive at ' + escapeHtml(name) + '</h3>' +
+      '<label class="field" style="margin-bottom:0"><span>Dwell time (minutes)</span>' +
+        '<input type="number" id="sd-min" class="num" min="0" step="1" value="0"></label>' +
       '<div class="row">' +
         '<button class="btn" id="sd-back" type="button">Back</button>' +
         '<button class="btn primary" id="sd-ok" type="button">Confirm</button>' +
@@ -868,11 +1048,11 @@
         f.focus(); f.select();
         function ok(){
           var m = Math.max(0, Number(f.value) || 0);
-          draft.stops.push({ targetType:t.targetType, targetId:t.targetId, waitMin:m });
+          draft.points.push({ x:w.x, y:w.y, destination:{ targetType:t.targetType, targetId:t.targetId }, dwellMin:m });
           var finishNow = pendingSection && pendingSection.finishAfter;
           pendingSection = null;
           p.remove(); updateDrawbar(); requestRender();
-          if(finishNow && draft.stops.length >= 2) finishRoute();
+          if(finishNow && draft.points.length >= 2) finishRoute();
         }
         p.querySelector("#sd-ok").addEventListener("click", ok);
         p.querySelector("#sd-back").addEventListener("click", function(){
@@ -884,15 +1064,16 @@
     pendingSection = { pop:pop, finishAfter:false };
   }
   function finishRoute(){
-    if(!draft || draft.stops.length < 2) return;
-    var stops = draft.stops.slice();
+    if(!draft || draft.points.length < 2) return;
+    var points = draft.points.slice();
     draft = null; pendingSection = null; hideDrawbar(); setCursor();
 
     var pop = popover(
-      '<h3>Name new route</h3>' +
+      '<h3>Finish route</h3>' +
       '<label class="field"><span>Label</span><input type="text" id="rt-label"></label>' +
-      '<label class="field" style="margin-bottom:0"><span>Role</span>' +
-        '<select id="rt-role"></select></label>' +
+      '<label class="field"><span>Role</span><select id="rt-role"></select></label>' +
+      '<label class="field" style="margin-bottom:0"><span>Number of agents</span>' +
+        '<input type="number" id="rt-agents" class="num" min="1" max="20" step="1" value="3"></label>' +
       '<div class="row">' +
         '<button class="btn" id="rt-back" type="button">Back</button>' +
         '<button class="btn primary" id="rt-ok" type="button">Confirm</button>' +
@@ -907,10 +1088,14 @@
           sel.appendChild(o);
         });
         function ok(){
+          var sections = draftPointsToSections(points);
+          if(!sections.length){ p.remove(); return; }
+          var count = clampAgentCount(p.querySelector("#rt-agents").value);
           var r = { id:uid("r_"),
                     label: NUHS.uniqueName(lab.value.trim() || "New Route",
                                            state.routes.map(function(x){ return x.label; })),
-                    roleId: sel.value, shift:"Day", stops:stops };
+                    roleId: sel.value, shift:"Day", isLoop:false, agentCount:count,
+                    simulateRoute:false, sections:sections };
           state.routes.push(r);
           state.selectedId = r.id;
           state.stepsDone.route = true;
@@ -921,12 +1106,140 @@
         p.querySelector("#rt-ok").addEventListener("click", ok);
         p.querySelector("#rt-back").addEventListener("click", function(){
           p.remove();
-          draft = { kind:"route", stops:stops, color:css("--nuhs-cyan") };
+          draft = { kind:"route", points:points, color:css("--nuhs-cyan") };
           showDrawbar("route"); updateDrawbar(); requestRender();
         });
         lab.focus(); lab.select();
       }
     );
+  }
+  function draftPointsToSections(points){
+    var sections = [], pending = [];
+    points.forEach(function(p){
+      pending.push({ x:p.x, y:p.y });
+      if(p.destination){
+        sections.push({ id:uid("sec_"), waypoints:pending,
+                        destination:{ targetType:p.destination.targetType, targetId:p.destination.targetId },
+                        dwellMin:Number(p.dwellMin)||0 });
+        pending = [];
+      }
+    });
+    if(pending.length){
+      sections.push({ id:uid("sec_"), waypoints:pending, destination:null, dwellMin:0 });
+    }
+    return sections;
+  }
+  function routeSectionByAddress(address){
+    var r = routeById(address.routeId);
+    if(!r) return null;
+    var sections = routeSections(r);
+    var section = sections.find(function(s){ return s.id === address.sectionId; });
+    return section ? { route:r, sections:sections, section:section } : null;
+  }
+  function moveRouteWaypoint(address, w){
+    var found = routeSectionByAddress(address);
+    if(!found || !found.section.waypoints[address.index]) return;
+    found.section.waypoints[address.index] = { x:w.x, y:w.y };
+  }
+  function settleRouteWaypoint(address, w){
+    var found = routeSectionByAddress(address);
+    if(!found || !found.section.waypoints[address.index]) return;
+    var target = hitTarget(w);
+    var isEnd = address.index === found.section.waypoints.length - 1;
+    if(target){
+      var snapped = target.targetType === "node" ? targetPoint(target)
+                  : target.targetType === "zone" ? targetPoint(target)
+                  : null;
+      if(snapped) found.section.waypoints[address.index] = snapped;
+      if(isEnd) found.section.destination = { targetType:target.targetType, targetId:target.targetId };
+    } else if(isEnd && found.section.destination){
+      found.section.destination = null;
+      found.section.dwellMin = 0;
+    }
+    rebuildRouteAgents(found.route.id);
+  }
+  function clampAgentCount(v){
+    var n = Math.round(Number(v)||1);
+    return Math.max(1, Math.min(20, n));
+  }
+
+  /* ---------- route simulation ---------- */
+  function rebuildRouteAgents(routeId){
+    routeAgents = routeAgents.filter(function(a){ return a.routeId !== routeId; });
+    var r = routeById(routeId), poly = r && routePolyline(r);
+    if(!r || !r.simulateRoute || !poly) return;
+    var count = clampAgentCount(r.agentCount || 3);
+    for(var i=0;i<count;i++){
+      routeAgents.push({
+        id:r.id + ":" + i, routeId:r.id,
+        distance: poly.total * i / count,
+        forward:true, waiting:0, lastStop:null
+      });
+    }
+  }
+  function rebuildAllRouteAgents(){
+    routeAgents = [];
+    state.routes.forEach(function(r){ rebuildRouteAgents(r.id); });
+    ensureSimLoop();
+  }
+  function anySimulatingRoute(){
+    return state.routes.some(function(r){ return !!r.simulateRoute; });
+  }
+  function routeSpeedPxPerSec(){
+    var mpp = metersPerPixel();
+    return mpp ? (1.35 / mpp) * 20 : 80;
+  }
+  function ensureSimLoop(){
+    if(anySimulatingRoute() && simLastTs == null) requestAnimationFrame(simLoop);
+  }
+  function simLoop(ts){
+    if(!anySimulatingRoute()){
+      simLastTs = null;
+      return;
+    }
+    if(simLastTs == null) simLastTs = ts;
+    var dt = Math.min(0.25, Math.max(0, (ts - simLastTs)/1000));
+    simLastTs = ts;
+    advanceRouteAgents(dt);
+    requestRender();
+    requestAnimationFrame(simLoop);
+  }
+  function advanceRouteAgents(dt){
+    var speed = routeSpeedPxPerSec();
+    routeAgents.forEach(function(agent){
+      var r = routeById(agent.routeId), poly = r && routePolyline(r);
+      if(!r || !poly) return;
+      if(agent.waiting > 0){
+        agent.waiting = Math.max(0, agent.waiting - dt);
+        return;
+      }
+      var previous = agent.distance;
+      agent.distance += agent.forward ? speed * dt : -speed * dt;
+      var low = Math.min(previous, agent.distance), high = Math.max(previous, agent.distance);
+      var stop = poly.stops.find(function(s){
+        return s.distance >= low && s.distance <= high && s.distance !== agent.lastStop;
+      });
+      if(stop){
+        agent.distance = stop.distance;
+        agent.waiting = stop.seconds;
+        agent.lastStop = stop.distance;
+        return;
+      }
+      if(agent.distance >= poly.total){
+        if(r.isLoop){
+          agent.distance -= poly.total;
+          agent.lastStop = null;
+        } else {
+          agent.distance = poly.total;
+          agent.forward = false;
+          agent.lastStop = null;
+        }
+      } else if(agent.distance <= 0){
+        agent.distance = 0;
+        agent.forward = true;
+        agent.lastStop = null;
+      }
+    });
   }
 
   /* ---------- scale ---------- */
@@ -975,13 +1288,28 @@
   }
 
   /* ---------- drawbar ---------- */
+  function setRouteDrawbarCollapsed(collapsed){
+    var bar = $("#drawbar"), btn = $("#draw-collapse"), steps = $("#draw-steps");
+    bar.classList.toggle("collapsed", collapsed);
+    steps.hidden = collapsed;
+    btn.title = collapsed ? "Expand instructions" : "Collapse instructions";
+    btn.setAttribute("aria-label", btn.title);
+    btn.innerHTML = collapsed
+      ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" ' +
+        'stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>'
+      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" ' +
+        'stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg>';
+  }
   function showDrawbar(kind, shape){
     var bar = $("#drawbar"), a = $("#draw-a"), b = $("#draw-b"),
-        fin = $("#draw-fin"), steps = $("#draw-steps"), foot = $("#draw-foot");
+        fin = $("#draw-fin"), steps = $("#draw-steps"), foot = $("#draw-foot"),
+        collapse = $("#draw-collapse");
     bar.hidden = false;
     bar.classList.remove("stack");
+    bar.classList.remove("collapsed");
     steps.hidden = true;
     foot.hidden = true;
+    collapse.hidden = true;
     fin.hidden = true;
     fin.innerHTML = FINISH_LABEL;
     // default home is the head row, inline with the other options
@@ -1019,16 +1347,21 @@
       bar.classList.add("stack");
       steps.hidden = false;
       steps.innerHTML =
-        '1. Click on node to start<br>' +
-        '2. Click to add next destination<br>' +
-        '3. Double click or click button to finish';
+        '1. Click to add a waypoint<br>' +
+        '2. Click a node/zone to add a section destination<br>' +
+        '3. Double click or click Finish to finish';
+      collapse.hidden = false;
+      setRouteDrawbarCollapsed(false);
+      collapse.onclick = function(){
+        setRouteDrawbarCollapsed(!steps.hidden);
+      };
       // on a route the button reads as the last step, so it sits under the
       // instructions rather than inline with the title
       foot.hidden = false;
       foot.appendChild(fin);
       fin.hidden = false;
       fin.onclick = function(){
-        if(draft && draft.stops.length >= 2) finishRoute();
+        if(draft && draft.points.length >= 2) finishRoute();
       };
       updateDrawbar();
     }
@@ -1043,7 +1376,7 @@
   function updateDrawbar(){
     var fin = $("#draw-fin");
     if(!draft || fin.hidden) return;
-    var ready = draft.kind === "route"     ? draft.stops.length >= 2
+    var ready = draft.kind === "route"     ? draft.points.length >= 2
               : draft.kind === "zone-poly" ? draft.pts.length >= 3
               : false;
     fin.disabled = !ready;
@@ -1052,6 +1385,7 @@
 
   function hideDrawbar(){ $("#drawbar").hidden = true; }
   function cancelDraft(){
+    if(pendingSection && pendingSection.pop) pendingSection.pop.remove();
     draft = null; pendingSection = null;
     state.hoverId = null;
     hideDrawbar(); setCursor(); requestRender();
@@ -1183,16 +1517,17 @@
 
   /* ---------- right rail ---------- */
   function setMode(m){
+    if(m === "roles") m = "zones";
+    if(!$("#filemanager").hidden) showPlanWorkspace();
     state.mode = m;
     cancelDraft();
     state.selectedId = null;
     document.querySelectorAll(".tool").forEach(function(b){
       b.classList.toggle("active", b.dataset.mode === m);
     });
-    var roles = $("#rolesgrid"), stage = $("#stagepanel");
-    if(m === "roles"){ roles.hidden = false; stage.style.display = "none"; }
-    else { roles.hidden = true; stage.style.display = ""; }
-    $("#railr").classList.toggle("solo", m === "roles");
+    var stage = $("#stagepanel");
+    stage.style.display = "";
+    $("#railr").classList.remove("solo");
     if(m === "routes") state.listTab = "routes";
     else if(state.listTab === "routes") state.listTab = "zones";
     refreshRail();
@@ -1210,13 +1545,14 @@
     renderTabs();
     renderList();
     renderProps();
-    renderRoles();
+    // Roles mode UI is disabled; fixed role definitions still drive route colors/icons.
+    // renderRoles();
   }
 
   function renderTabs(){
     var tabs = $("#rrtabs");
     tabs.innerHTML = "";
-    if(state.mode === "roles") return;
+    // if(state.mode === "roles") return;
     var defs = state.mode === "routes" ? [["routes","Routes"]]
              : [["zones","Zones"],["nodes","Nodes"]];
     defs.forEach(function(d){
@@ -1235,7 +1571,7 @@
   function renderList(){
     var wrap = $("#listwrap");
     wrap.innerHTML = "";
-    if(state.mode === "roles") return;
+    // if(state.mode === "roles") return;
 
     var addBtn = document.createElement("button");
     addBtn.className = "btn wide additem";
@@ -1365,11 +1701,13 @@
     var box = $("#props"), title = $("#props-title");
     box.innerHTML = "";
 
+    /*
     if(state.mode === "roles"){
       title.textContent = "Role properties";
       renderRoleProps(box);
       return;
     }
+    */
 
     var sel = selected();
     if(!sel){
@@ -1515,6 +1853,49 @@
     });
     box.appendChild(redraw);
 
+    var simLabel = document.createElement("label");
+    simLabel.className = "chk simtoggle";
+    var simToggle = document.createElement("input");
+    simToggle.type = "checkbox";
+    simToggle.checked = !!r.simulateRoute;
+    simToggle.addEventListener("change", function(){
+      r.simulateRoute = simToggle.checked;
+      if(r.simulateRoute) rebuildRouteAgents(r.id);
+      else routeAgents = routeAgents.filter(function(a){ return a.routeId !== r.id; });
+      persist(); requestRender(); ensureSimLoop();
+    });
+    simLabel.appendChild(simToggle);
+    var simText = document.createElement("span");
+    simText.className = "simtext";
+    simText.textContent = "Simulate Route";
+    var simSwitch = document.createElement("span");
+    simSwitch.className = "switch";
+    simSwitch.setAttribute("aria-hidden", "true");
+    simLabel.appendChild(simText);
+    simLabel.appendChild(simSwitch);
+    box.appendChild(simLabel);
+
+    var countRow = document.createElement("div");
+    countRow.className = "stepper";
+    var minus = document.createElement("button");
+    minus.type = "button"; minus.className = "btn iconbtn"; minus.textContent = "−";
+    var count = document.createElement("input");
+    count.type = "number"; count.className = "num"; count.min = "1"; count.max = "20";
+    count.value = clampAgentCount(r.agentCount || 3);
+    var plus = document.createElement("button");
+    plus.type = "button"; plus.className = "btn iconbtn"; plus.textContent = "+";
+    function setCount(v){
+      r.agentCount = clampAgentCount(v);
+      count.value = r.agentCount;
+      rebuildRouteAgents(r.id);
+      persist(); requestRender();
+    }
+    minus.addEventListener("click", function(){ setCount((Number(count.value)||1) - 1); });
+    plus.addEventListener("click", function(){ setCount((Number(count.value)||1) + 1); });
+    count.addEventListener("change", function(){ setCount(count.value); });
+    countRow.appendChild(minus); countRow.appendChild(count); countRow.appendChild(plus);
+    box.appendChild(field("Number of agents", countRow));
+
     var roleSel = document.createElement("select");
     state.roles.forEach(function(role){
       var o = document.createElement("option");
@@ -1523,11 +1904,9 @@
       roleSel.appendChild(o);
     });
     roleSel.addEventListener("change", function(){
-      r.roleId = roleSel.value; persist(); renderList(); requestRender();
+      r.roleId = roleSel.value; rebuildRouteAgents(r.id); persist(); renderList(); requestRender();
     });
-    var rf = field("Role", roleSel);
-    rf.style.marginTop = "14px";
-    box.appendChild(rf);
+    box.appendChild(field("Role", roleSel));
 
     var shiftSel = document.createElement("select");
     ["Day","Evening","Night"].forEach(function(s){
@@ -1539,6 +1918,21 @@
     shiftSel.addEventListener("change", function(){ r.shift = shiftSel.value; persist(); });
     box.appendChild(field("Shift", shiftSel));
 
+    var typeWrap = document.createElement("div");
+    typeWrap.className = "seg";
+    [["Ping Pong",false],["Loop",true]].forEach(function(d){
+      var b = document.createElement("button");
+      b.type = "button"; b.textContent = d[0];
+      b.className = r.isLoop === d[1] ? "active" : "";
+      b.addEventListener("click", function(){
+        r.isLoop = d[1];
+        rebuildRouteAgents(r.id);
+        persist(); renderProps(); requestRender();
+      });
+      typeWrap.appendChild(b);
+    });
+    box.appendChild(field("Type", typeWrap));
+
     var h = document.createElement("div");
     h.className = "panel-h";
     h.style.cssText = "padding:6px 0 4px";
@@ -1547,20 +1941,31 @@
 
     var list = document.createElement("div");
     list.className = "sections";
-    for(var i=1;i<r.stops.length;i++){
+    var sections = routeSections(r);
+    for(var i=0;i<sections.length;i++){
       (function(i){
+        var section = sections[i];
         var row = document.createElement("div");
         row.className = "secrow";
         var lbl = document.createElement("span");
         lbl.className = "lbl";
-        lbl.textContent = stopLabel(r.stops[i-1]) + " → " + stopLabel(r.stops[i]);
-        var inp = document.createElement("input");
-        inp.type = "number"; inp.min = "0"; inp.value = r.stops[i].waitMin;
-        inp.addEventListener("change", function(){
-          r.stops[i].waitMin = Math.max(0, Number(inp.value)||0);
-          persist(); renderProps();
-        });
-        row.appendChild(lbl); row.appendChild(inp);
+        lbl.textContent = sectionLabel(sections, i);
+        row.appendChild(lbl);
+        if(sectionAcceptsDwell(section)){
+          var inp = document.createElement("input");
+          inp.type = "number"; inp.min = "0"; inp.value = section.dwellMin;
+          inp.addEventListener("change", function(){
+            section.dwellMin = Math.max(0, Number(inp.value)||0);
+            rebuildRouteAgents(r.id);
+            persist(); renderProps();
+          });
+          row.appendChild(inp);
+        } else {
+          var dash = document.createElement("span");
+          dash.className = "dash";
+          dash.textContent = "—";
+          row.appendChild(dash);
+        }
         list.appendChild(row);
       })(i);
     }
@@ -1577,7 +1982,7 @@
     var m = routeMeters(r);
     var p = document.createElement("p");
     p.className = "stat";
-    p.innerHTML = r.stops.length + " stops · <b>" +
+    p.innerHTML = routeAllPoints(r).length + " waypoints · <b>" +
       (m != null ? m.toFixed(1) + " m" : Math.round(routePixels(r)) + " px") + "</b>";
     box.appendChild(p);
 
@@ -1591,18 +1996,26 @@
   function deleteSelected(){
     var id = state.selectedId;
     if(!id) return;
+    var routeDeleted = !!routeById(id);
     state.zones  = state.zones.filter(function(o){ return o.id !== id; });
     state.nodes  = state.nodes.filter(function(o){ return o.id !== id; });
     state.routes = state.routes.filter(function(o){ return o.id !== id; });
     state.routes.forEach(function(r){
-      r.stops = r.stops.filter(function(s){ return s.targetId !== id; });
+      routeSections(r).forEach(function(section){
+        if(section.destination && section.destination.targetId === id){
+          section.destination = null;
+          section.dwellMin = 0;
+        }
+      });
+      if(r.stops) r.stops = r.stops.filter(function(s){ return s.targetId !== id; });
     });
-    state.routes = state.routes.filter(function(r){ return r.stops.length >= 2; });
+    if(routeDeleted) routeAgents = routeAgents.filter(function(a){ return a.routeId !== id; });
+    state.routes = state.routes.filter(function(r){ return routeAllPoints(r).length >= 2; });
     state.selectedId = null;
     persist(); refreshRail(); requestRender();
   }
 
-  /* ---------- roles ---------- */
+  /* ---------- roles editor (disabled) ----------
   function renderRoles(){
     var grid = $("#rolesgrid");
     if(state.mode !== "roles"){ return; }
@@ -1667,13 +2080,16 @@
       role.color = v; persist(); renderRoles(); renderList(); requestRender();
     })));
   }
+  ---------- end disabled roles editor ---------- */
 
   /* ---------- step coach ---------- */
   var COACH = [
     { key:"zone",  title:"Add a zone",  body:"Outline an operational area on the map. Rectangle for a room, polygon for an irregular space.", cta:"Add zone" },
     { key:"node",  title:"Add a node",  body:"Place a touchpoint inside a zone — a desk, a bay, a station a route can stop at.", cta:"Add node" },
-    { key:"route", title:"Add a route", body:"Chain zones and nodes into a path, giving each section the time it takes.", cta:"Add route" },
+    { key:"route", title:"Add a route", body:"Place waypoints on the plan. Tapping a zone or node creates a section destination with dwell time.", cta:"Add route" }
+    /*
     { key:"roles", title:"Edit roles",  body:"Set staffing and colour for each role. Route colour follows the role that walks it.", cta:"Edit roles" }
+    */
   ];
   function showCoach(step){
     state.coachStep = step;
@@ -1681,7 +2097,7 @@
     if(step < 1 || step > COACH.length){ c.hidden = true; return; }
     var d = COACH[step-1];
     c.hidden = false;
-    $("#coach-eyebrow").textContent = step === 1 ? "Step 1 of 4" : "Step " + (step-1) + " complete";
+    $("#coach-eyebrow").textContent = step === 1 ? "Step 1 of 3" : "Step " + (step-1) + " complete";
     $("#coach-title").textContent = "Step " + step + ": " + d.title;
     $("#coach-body").textContent = d.body;
     $("#coach-go").textContent = d.cta;
@@ -1697,7 +2113,7 @@
     if(step === 1){ setMode("zones"); state.listTab = "zones"; refreshRail(); startZone("rect"); }
     else if(step === 2){ setMode("zones"); state.listTab = "nodes"; refreshRail(); startNode(); }
     else if(step === 3){ setMode("routes"); startRoute(); }
-    else if(step === 4){ setMode("roles"); }
+    // else if(step === 4){ setMode("roles"); }
     state.coachStep = step;   // setMode cancels the draft, so restore after
     if(step === 1) startZone("rect");
     if(step === 2) startNode();
@@ -1841,9 +2257,11 @@
 
   $("#btn-upload").addEventListener("click", function(){ $("#fileInput").click(); });
   $("#btn-replace").addEventListener("click", function(){ $("#fileInput").click(); });
+  $("#btn-file-manager").addEventListener("click", showFileManager);
   $("#fileInput").addEventListener("change", function(e){
     var f = e.target.files[0];
     if(!f) return;
+    clearCurrentFileRef();
     var reader = new FileReader();
     reader.onload = function(){
       state.map = { name:f.name, dataUrl:reader.result, width:0, height:0, isTemplate:false };
@@ -1890,25 +2308,33 @@
     clearTimeout(saveTimer);
     saveTimer = setTimeout(function(){ save(false); }, 500);
   }
+  function serializeMap(withImage){
+    if(!state.map) return null;
+    var map = {
+      name: state.map.name,
+      width: state.map.width, height: state.map.height,
+      isTemplate: !!state.map.isTemplate,
+      embedded: !!(withImage && !state.map.isTemplate && state.map.dataUrl)
+    };
+    if(withImage && !state.map.isTemplate && state.map.dataUrl) map.dataUrl = state.map.dataUrl;
+    return map;
+  }
   function serialize(withImage){
     var mpp = metersPerPixel();
     var s = NUHS.loadSettings();
     return {
-      kind:"ed-flow-plan", version:3,
+      kind:"ed-flow-plan", version:4,
       exportedAt:new Date().toISOString(),
       settings:s,
-      map: state.map ? {
-        name: state.map.name,
-        width: state.map.width, height: state.map.height,
-        isTemplate: !!state.map.isTemplate,
-        embedded: !!(withImage && !state.map.isTemplate),
-        dataUrl: (withImage && !state.map.isTemplate) ? state.map.dataUrl : null
-      } : null,
+      map: serializeMap(withImage),
       mapOpacity: state.mapOpacity,
       layers: Object.assign({}, state.layers),
       scale: state.scale ? Object.assign({ metersPerPixel:mpp }, state.scale) : null,
       roles: state.roles.map(function(r){
-        return { id:r.id, label:r.label, color:r.color, staffing:r.staffing, unit:r.unit, icon:r.icon };
+        return {
+          id:r.id, label:r.label, color:r.color, icon:r.icon
+          // staffing:r.staffing, unit:r.unit
+        };
       }),
       zones: state.zones.map(function(z){
         return { id:z.id, name:z.name, color:z.color, capacity:z.capacity, shape:z.shape,
@@ -1923,22 +2349,33 @@
       }),
       routes: state.routes.map(function(r){
         var m = routeMeters(r);
+        var sections = routeSections(r);
         return {
           id:r.id, label:r.label, roleId:r.roleId, roleLabel:roleById(r.roleId).label,
-          shift:r.shift,
+          shift:r.shift, isLoop:!!r.isLoop, type:r.isLoop ? "loop" : "pingpong",
+          simulateRoute:!!r.simulateRoute, agentCount:clampAgentCount(r.agentCount || 3),
           totalMinutes: routeTotalMin(r),
           distancePixels: round2(routePixels(r)),
           distanceMeters: m == null ? null : round2(m),
-          stops: r.stops.map(function(s,i){
-            return { index:i, targetType:s.targetType, targetId:s.targetId,
-                     name: stopLabel(s), waitMin: i === 0 ? 0 : (Number(s.waitMin)||0) };
+          waypoints: routeAllPoints(r).map(function(p,i){
+            return { index:i, x:round2(p.x), y:round2(p.y),
+                     xMeters: mpp == null ? null : round2(p.x*mpp),
+                     yMeters: mpp == null ? null : round2(p.y*mpp) };
           }),
-          sections: r.stops.slice(1).map(function(s,i){
-            var a = stopPoint(r.stops[i]), b = stopPoint(s);
-            var d = Math.hypot(b.x-a.x, b.y-a.y);
-            return { from: stopLabel(r.stops[i]), to: stopLabel(s),
-                     minutes: Number(s.waitMin)||0,
-                     distanceMeters: mpp == null ? null : round2(d*mpp) };
+          sections: sections.map(function(section,i){
+            var d = sectionPixels(sections, i);
+            return {
+              id:section.id, label:sectionLabel(sections, i),
+              destination:section.destination ? {
+                targetType:section.destination.targetType,
+                targetId:section.destination.targetId,
+                name:destinationLabel(section.destination)
+              } : null,
+              acceptsDwell:sectionAcceptsDwell(section),
+              dwellMin:sectionAcceptsDwell(section) ? (Number(section.dwellMin)||0) : 0,
+              waypoints:(section.waypoints || []).map(function(p){ return { x:round2(p.x), y:round2(p.y) }; }),
+              distanceMeters: mpp == null ? null : round2(d*mpp)
+            };
           })
         };
       }),
@@ -1951,15 +2388,53 @@
     var payload = serialize(true);
     try{
       localStorage.setItem(LS_KEY, JSON.stringify(payload));
-      if(explicit) NUHS.toast("Saved to this browser");
     }catch(err){
       try{
         localStorage.setItem(LS_KEY, JSON.stringify(serialize(false)));
-        if(explicit) NUHS.toast("Saved — the floorplan image was too large to store, re-upload it on reload", true);
+        if(explicit) NUHS.toast("Saved locally without image — floorplan was too large for browser storage", true);
       }catch(e2){
         if(explicit) NUHS.toast("Couldn't save locally — use Export", true);
       }
     }
+    if(explicit) savePlanToFirestore(payload);
+  }
+
+  function normalizeRoute(r){
+    var sections = [];
+    if(r.sections && r.sections.length){
+      sections = r.sections.map(function(section){
+        var dest = section.destination || null;
+        if(dest && dest.targetType == null && dest.type){
+          dest = { targetType:dest.type, targetId:dest.id };
+        }
+        return {
+          id:section.id || uid("sec_"),
+          waypoints:(section.waypoints || []).map(function(p){
+            return { x:Number(p.x)||0, y:Number(p.y)||0 };
+          }),
+          destination: dest ? { targetType:dest.targetType || "zone", targetId:dest.targetId } : null,
+          dwellMin:Number(section.dwellMin ?? section.minutes ?? section.waitMin) || 0
+        };
+      }).filter(function(section){ return section.waypoints.length; });
+    } else if(r.stops && r.stops.length){
+      sections = legacyStopsToSections(r.stops.map(function(s){
+        return { targetType:s.targetType || "node", targetId:s.targetId, waitMin:s.waitMin };
+      }));
+    } else if(r.waypoints && r.waypoints.length >= 2){
+      sections = [{ id:uid("sec_"),
+                    waypoints:r.waypoints.map(function(p){ return { x:Number(p.x)||0, y:Number(p.y)||0 }; }),
+                    destination:null, dwellMin:0 }];
+    }
+    return {
+      id:r.id||uid("r_"),
+      label:r.label||"Route",
+      roleId:r.roleId||"other",
+      shift:r.shift||"Day",
+      isLoop: r.isLoop != null ? !!r.isLoop : r.type === "loop",
+      simulateRoute:!!r.simulateRoute,
+      agentCount:clampAgentCount(r.agentCount || r.agents || 3),
+      sections:sections
+    };
   }
 
   function deserialize(d){
@@ -1969,6 +2444,8 @@
     state.layers = Object.assign({ zones:true,nodes:true,routes:true,grid:false }, d.layers||{});
     state.scale = d.scale ? { ax:d.scale.ax, ay:d.scale.ay, bx:d.scale.bx, by:d.scale.by,
                               meters:d.scale.meters } : null;
+    state.roles = ROLE_DEFS.map(function(def){ return Object.assign({}, def); });
+    /*
     if(d.roles && d.roles.length){
       state.roles = ROLE_DEFS.map(function(def){
         var found = d.roles.find(function(r){ return r.id === def.id; });
@@ -1977,6 +2454,7 @@
         return role;
       });
     }
+    */
     state.zones = (d.zones||[]).map(function(z){
       return { id:z.id||uid("z_"), name:z.name||"Zone", color:z.color||PALETTE[0],
                capacity: z.capacity == null ? 20 : z.capacity, shape:z.shape||"poly",
@@ -1987,13 +2465,8 @@
                x:Number(n.x), y:Number(n.y), zoneId:n.zoneId||null };
     });
     state.routes = (d.routes||[]).map(function(r){
-      return { id:r.id||uid("r_"), label:r.label||"Route", roleId:r.roleId||"other",
-               shift:r.shift||"Day",
-               stops:(r.stops||[]).map(function(s,i){
-                 return { targetType:s.targetType||"zone", targetId:s.targetId,
-                          waitMin: i === 0 ? 0 : (Number(s.waitMin)||0) };
-               }) };
-    }).filter(function(r){ return r.stops.length >= 2; });
+      return normalizeRoute(r);
+    }).filter(function(r){ return routeAllPoints(r).length >= 2; });
     state.selectedId = null;
     if(d.view) state.view = Object.assign({}, d.view);
 
@@ -2002,10 +2475,11 @@
                     isTemplate:!!d.map.isTemplate,
                     dataUrl: d.map.isTemplate ? TEMPLATE_MAP : (d.map.dataUrl||null) };
       if(state.map.dataUrl){
-        loadImage(state.map.dataUrl, onMapReady);
+        loadImage(state.map.dataUrl, function(){ onMapReady(); rebuildAllRouteAgents(); });
       } else {
         img = null;
         onMapReady();
+        rebuildAllRouteAgents();
         NUHS.toast("This plan has no image embedded — use Replace to re-attach " + state.map.name, true);
       }
     }
@@ -2038,24 +2512,24 @@
         return { targetType:"node", targetId:id,
                  waitMin: i === 0 ? 0 : Math.round(Number(p.dwellMin ?? p.dwell) || 0) };
       }).filter(function(s){ return s.targetId; });
-      return { id:r.id||uid("r_"), label:r.label || "Route",
-               roleId: ACTOR_TO_ROLE[r.actor] || "other",
-               shift: r.shift || "Day", stops:stops };
-    }).filter(function(r){ return r.stops.length >= 2; });
+      return normalizeRoute({ id:r.id||uid("r_"), label:r.label || "Route",
+                              roleId: ACTOR_TO_ROLE[r.actor] || "other",
+                              shift: r.shift || "Day", stops:stops });
+    }).filter(function(r){ return routeAllPoints(r).length >= 2; });
 
     if(d.floorplan){
       state.map = { name:d.floorplan.name||"floorplan", width:d.floorplan.width||0,
                     height:d.floorplan.height||0, isTemplate:false,
                     dataUrl:d.floorplan.dataUrl||null };
-      if(state.map.dataUrl) loadImage(state.map.dataUrl, onMapReady);
-      else { img = null; onMapReady();
+      if(state.map.dataUrl) loadImage(state.map.dataUrl, function(){ onMapReady(); rebuildAllRouteAgents(); });
+      else { img = null; onMapReady(); rebuildAllRouteAgents();
              NUHS.toast("Imported — re-attach " + state.map.name + " with Replace", true); }
     }
     NUHS.toast("Imported and upgraded from the previous format");
   }
 
-  /* ---------- PNG export ---------- */
-  function exportPng(){
+  /* ---------- annotated plan rendering ---------- */
+  function renderAnnotatedCanvas(){
     if(!state.map){ NUHS.toast("Load a floorplan first", true); return; }
     var W = state.map.width, H = state.map.height;
     var c = document.createElement("canvas");
@@ -2083,19 +2557,21 @@
     });
 
     state.routes.forEach(function(r){
-      if(r.stops.length < 2) return;
+      var pts = routeAllPoints(r);
+      if(pts.length < 2) return;
       var col = roleById(r.roleId).color;
       g.beginPath();
-      r.stops.forEach(function(s,i){
-        var p = stopPoint(s); i ? g.lineTo(p.x,p.y) : g.moveTo(p.x,p.y);
-      });
+      pts.forEach(function(p,i){ i ? g.lineTo(p.x,p.y) : g.moveTo(p.x,p.y); });
+      if(r.isLoop && pts.length > 2) g.closePath();
       g.lineWidth = 3.4*S; g.strokeStyle = col; g.globalAlpha = 0.9; g.stroke(); g.globalAlpha = 1;
-      r.stops.forEach(function(s){
-        var p = stopPoint(s);
+      routeSections(r).forEach(function(section){
+        var p = section.waypoints && section.waypoints.length ? section.waypoints[section.waypoints.length-1] : null;
+        if(!p) return;
         g.beginPath(); g.arc(p.x,p.y,5*S,0,Math.PI*2);
-        g.fillStyle = col; g.fill();
+        g.fillStyle = sectionAcceptsDwell(section) ? "#FFFFFF" : col; g.fill();
+        g.lineWidth = 1.7*S; g.strokeStyle = col; g.stroke();
       });
-      var p0 = stopPoint(r.stops[0]);
+      var p0 = pts[0];
       g.font = "700 " + (12*S) + 'px "Open Sans", sans-serif';
       g.fillStyle = col; g.textAlign = "left"; g.textBaseline = "alphabetic";
       g.fillText(r.label + "  ·  " + routeTotalMin(r) + " min", p0.x + 9*S, p0.y - 10*S);
@@ -2128,11 +2604,623 @@
       }
     }
 
-    var s = NUHS.loadSettings();
-    c.toBlob(function(blob){
-      NUHS.downloadBlob(blob, NUHS.slug(s.department, "ed-flow") + "-plan.png");
-      NUHS.toast("PNG exported");
+    return c;
+  }
+
+  function stripKnownExtension(name){
+    return String(name || "").replace(/\.(json|zip|png|jpe?g|webp)$/i, "");
+  }
+  function cleanFilename(name, fallback){
+    var base = stripKnownExtension(name || fallback || "ed-flow-plan")
+      .replace(/[\\/:*?"<>|]+/g, "_")
+      .replace(/^\.+|\.+$/g, "")
+      .trim();
+    return base || fallback || "ed-flow-plan";
+  }
+  function settingsFilename(settings){
+    settings = settings || NUHS.loadSettings();
+    return cleanFilename(settings.filename || NUHS.slug(settings.department, "ed-flow") + "-plan", "ed-flow-plan");
+  }
+  function persistCurrentFileRef(){
+    try{ localStorage.setItem(FILE_REF_KEY, JSON.stringify(currentFileRef)); }catch(err){}
+  }
+  function restoreCurrentFileRef(){
+    try{
+      var ref = JSON.parse(localStorage.getItem(FILE_REF_KEY) || "null");
+      if(ref && ref.id) currentFileRef = { id:ref.id, filename:ref.filename || null };
+    }catch(err){}
+  }
+  function clearCurrentFileRef(){
+    currentFileRef = { id:null, filename:null };
+    try{ localStorage.removeItem(FILE_REF_KEY); }catch(err){}
+  }
+  function applyPlanSettings(plan, fallbackFilename){
+    var current = NUHS.loadSettings();
+    var next = Object.assign({}, current, plan && plan.settings ? plan.settings : {});
+    if(fallbackFilename) next.filename = fallbackFilename;
+    next.filename = settingsFilename(next);
+    if(NUHS.saveSettings(next)){
+      NUHS.settings = NUHS.loadSettings();
+      document.dispatchEvent(new CustomEvent("nuhs:settings", { detail:NUHS.settings }));
+    }
+  }
+  function webpNameFromImageName(name){
+    var base = cleanFilename(stripKnownExtension(name || "floorplan"), "floorplan");
+    return base + ".webp";
+  }
+  function canvasToBlob(canvas, type, quality){
+    return new Promise(function(resolve, reject){
+      canvas.toBlob(function(blob){
+        if(blob) resolve(blob);
+        else reject(new Error("Couldn't create image export"));
+      }, type, quality);
     });
+  }
+  function floorplanWebpBlob(){
+    if(!state.map || !img) return Promise.reject(new Error("No floorplan image is loaded"));
+    var c = document.createElement("canvas");
+    c.width = state.map.width; c.height = state.map.height;
+    var g = c.getContext("2d");
+    g.fillStyle = "#FFFFFF"; g.fillRect(0, 0, c.width, c.height);
+    g.drawImage(img, 0, 0, c.width, c.height);
+    return canvasToBlob(c, "image/webp", 0.92);
+  }
+  function annotatedPlanWebpBlob(){
+    var c = renderAnnotatedCanvas();
+    if(!c) return Promise.reject(new Error("No annotated plan is available"));
+    return canvasToBlob(c, "image/webp", 0.92);
+  }
+  function textBlob(text, type){
+    return new Blob([text], { type:type || "text/plain" });
+  }
+
+  var CRC_TABLE = null;
+  function crcTable(){
+    if(CRC_TABLE) return CRC_TABLE;
+    CRC_TABLE = [];
+    for(var n=0;n<256;n++){
+      var c = n;
+      for(var k=0;k<8;k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      CRC_TABLE[n] = c >>> 0;
+    }
+    return CRC_TABLE;
+  }
+  function crc32(bytes){
+    var table = crcTable(), c = 0xFFFFFFFF;
+    for(var i=0;i<bytes.length;i++) c = table[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+  }
+  function dosDateTime(date){
+    var y = Math.max(1980, date.getFullYear());
+    return {
+      time: (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds()/2),
+      date: ((y - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate()
+    };
+  }
+  function headerBytes(size){
+    var bytes = new Uint8Array(size), view = new DataView(bytes.buffer);
+    return {
+      bytes: bytes,
+      u16: function(offset, value){ view.setUint16(offset, value, true); },
+      u32: function(offset, value){ view.setUint32(offset, value >>> 0, true); }
+    };
+  }
+  async function createZip(files){
+    var enc = new TextEncoder(), chunks = [], central = [], offset = 0;
+    var stamp = dosDateTime(new Date());
+    for(var i=0;i<files.length;i++){
+      var nameBytes = enc.encode(files[i].name);
+      var data = new Uint8Array(await files[i].blob.arrayBuffer());
+      var crc = crc32(data);
+      var local = headerBytes(30);
+      local.u32(0, 0x04034b50);
+      local.u16(4, 20);
+      local.u16(6, 0x0800);
+      local.u16(8, 0);
+      local.u16(10, stamp.time);
+      local.u16(12, stamp.date);
+      local.u32(14, crc);
+      local.u32(18, data.length);
+      local.u32(22, data.length);
+      local.u16(26, nameBytes.length);
+      local.u16(28, 0);
+      chunks.push(local.bytes, nameBytes, data);
+
+      var dir = headerBytes(46);
+      dir.u32(0, 0x02014b50);
+      dir.u16(4, 20);
+      dir.u16(6, 20);
+      dir.u16(8, 0x0800);
+      dir.u16(10, 0);
+      dir.u16(12, stamp.time);
+      dir.u16(14, stamp.date);
+      dir.u32(16, crc);
+      dir.u32(20, data.length);
+      dir.u32(24, data.length);
+      dir.u16(28, nameBytes.length);
+      dir.u16(30, 0);
+      dir.u16(32, 0);
+      dir.u16(34, 0);
+      dir.u16(36, 0);
+      dir.u32(38, 0);
+      dir.u32(42, offset);
+      central.push(dir.bytes, nameBytes);
+      offset += local.bytes.length + nameBytes.length + data.length;
+    }
+    var centralSize = central.reduce(function(sum, chunk){ return sum + chunk.length; }, 0);
+    var end = headerBytes(22);
+    end.u32(0, 0x06054b50);
+    end.u16(8, files.length);
+    end.u16(10, files.length);
+    end.u32(12, centralSize);
+    end.u32(16, offset);
+    end.u16(20, 0);
+    return new Blob(chunks.concat(central, [end.bytes]), { type:"application/zip" });
+  }
+  function decodeZipName(bytes, utf8){
+    if(utf8 && window.TextDecoder) return new TextDecoder("utf-8").decode(bytes);
+    var s = "";
+    for(var i=0;i<bytes.length;i++) s += String.fromCharCode(bytes[i]);
+    return s;
+  }
+  async function inflateZipData(bytes){
+    if(!window.DecompressionStream) throw new Error("This browser cannot read compressed ZIP entries");
+    var stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+  async function readZipEntries(file){
+    var bytes = new Uint8Array(await file.arrayBuffer());
+    var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    var eocd = -1;
+    for(var p=bytes.length-22; p>=Math.max(0, bytes.length-65557); p--){
+      if(view.getUint32(p, true) === 0x06054b50){ eocd = p; break; }
+    }
+    if(eocd < 0) throw new Error("ZIP file is missing its directory");
+    var total = view.getUint16(eocd + 10, true);
+    var pos = view.getUint32(eocd + 16, true);
+    var entries = [];
+    for(var i=0;i<total;i++){
+      if(view.getUint32(pos, true) !== 0x02014b50) throw new Error("ZIP directory is invalid");
+      var flags = view.getUint16(pos + 8, true);
+      var method = view.getUint16(pos + 10, true);
+      var compressedSize = view.getUint32(pos + 20, true);
+      var nameLen = view.getUint16(pos + 28, true);
+      var extraLen = view.getUint16(pos + 30, true);
+      var commentLen = view.getUint16(pos + 32, true);
+      var localOffset = view.getUint32(pos + 42, true);
+      var name = decodeZipName(bytes.slice(pos + 46, pos + 46 + nameLen), !!(flags & 0x0800));
+      if(name && name[name.length-1] !== "/"){
+        entries.push({ name:name, method:method, compressedSize:compressedSize, localOffset:localOffset });
+      }
+      pos += 46 + nameLen + extraLen + commentLen;
+    }
+    return entries.map(function(entry){
+      return {
+        name: entry.name,
+        blob: async function(){
+          var local = entry.localOffset;
+          if(view.getUint32(local, true) !== 0x04034b50) throw new Error("ZIP entry is invalid");
+          var nlen = view.getUint16(local + 26, true);
+          var xlen = view.getUint16(local + 28, true);
+          var start = local + 30 + nlen + xlen;
+          var compressed = bytes.slice(start, start + entry.compressedSize);
+          var data = entry.method === 0 ? compressed
+                   : entry.method === 8 ? await inflateZipData(compressed)
+                   : null;
+          if(!data) throw new Error("ZIP entry uses an unsupported compression method");
+          return new Blob([data]);
+        }
+      };
+    });
+  }
+
+  function readFileAsText(file){
+    return new Promise(function(resolve, reject){
+      var reader = new FileReader();
+      reader.onload = function(){ resolve(reader.result); };
+      reader.onerror = function(){ reject(new Error("Couldn't read " + file.name)); };
+      reader.readAsText(file);
+    });
+  }
+  function blobToDataUrl(blob){
+    return new Promise(function(resolve, reject){
+      var reader = new FileReader();
+      reader.onload = function(){ resolve(reader.result); };
+      reader.onerror = function(){ reject(new Error("Couldn't read the floorplan image")); };
+      reader.readAsDataURL(blob);
+    });
+  }
+  function isZipFile(file){
+    return /\.zip$/i.test(file.name) || /zip/i.test(file.type || "");
+  }
+  function isImageEntry(name){
+    return /\.(png|jpe?g|webp)$/i.test(name);
+  }
+  function isAnnotatedPlanName(name){
+    return /annotated[\s_-]*plan\.webp$/i.test(name);
+  }
+  function chooseFloorplanEntry(entries, plan){
+    var images = entries.filter(function(entry){
+      return isImageEntry(entry.name) && !isAnnotatedPlanName(entry.name);
+    });
+    if(!images.length) return null;
+    var mapName = plan && plan.map && plan.map.name ? stripKnownExtension(plan.map.name).toLowerCase() : "";
+    if(mapName){
+      var matched = images.find(function(entry){
+        var leaf = entry.name.split("/").pop();
+        return stripKnownExtension(leaf).toLowerCase() === mapName;
+      });
+      if(matched) return matched;
+    }
+    return images[0];
+  }
+  async function importZipFile(file){
+    var entries = await readZipEntries(file);
+    var jsonEntry = entries.find(function(entry){ return /\.json$/i.test(entry.name); });
+    if(!jsonEntry) throw new Error("ZIP file does not contain a JSON plan");
+    var jsonText = await (await jsonEntry.blob()).text();
+    var plan = JSON.parse(jsonText);
+    if(plan.kind && plan.kind !== "ed-flow-plan" && plan.kind !== "ed-flow-annotation"){
+      throw new Error("not a plan file");
+    }
+    var floorplan = chooseFloorplanEntry(entries, plan);
+    if(floorplan){
+      var floorBlob = await floorplan.blob();
+      plan.map = plan.map || {};
+      plan.map.name = floorplan.name.split("/").pop();
+      plan.map.isTemplate = false;
+      plan.map.embedded = true;
+      plan.map.dataUrl = await blobToDataUrl(floorBlob);
+    }
+    return plan;
+  }
+  async function importPlanFile(file){
+    if(isZipFile(file)) return importZipFile(file);
+    var text = await readFileAsText(file);
+    var plan = JSON.parse(text);
+    if(plan.kind && plan.kind !== "ed-flow-plan" && plan.kind !== "ed-flow-annotation"){
+      throw new Error("not a plan file");
+    }
+    return plan;
+  }
+  function closeModal(m){
+    if(m) m.remove();
+  }
+  function openImportDialog(){
+    var m = document.createElement("div");
+    m.className = "modal";
+    m.innerHTML =
+      '<div class="box" role="dialog" aria-modal="true" aria-label="Import plan">' +
+        '<h2>Import</h2>' +
+        '<p>Import either (a) JSON file or (b) Zip file with JSON file and floorplan</p>' +
+        '<div class="row">' +
+          '<button class="btn" id="imp-cancel" type="button">Cancel</button>' +
+          '<button class="btn primary" id="imp-choose" type="button">Choose file</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(m);
+    m.querySelector("#imp-cancel").addEventListener("click", function(){ closeModal(m); });
+    m.querySelector("#imp-choose").addEventListener("click", function(){
+      activeImportModal = m;
+      $("#importInput").click();
+    });
+    m.addEventListener("click", function(e){ if(e.target === m) closeModal(m); });
+    m.querySelector("#imp-choose").focus();
+  }
+  async function openExportDialog(){
+    var settings = NUHS.loadSettings();
+    var defaultName = settingsFilename(settings);
+    var m = document.createElement("div");
+    m.className = "modal";
+    m.innerHTML =
+      '<div class="box" role="dialog" aria-modal="true" aria-label="Export plan">' +
+        '<h2>Export</h2>' +
+        '<label class="field"><span>Filename</span><input type="text" id="exp-name"></label>' +
+        '<label class="chk"><input type="checkbox" id="exp-floorplan"> Include floorplan</label>' +
+        '<div class="row">' +
+          '<button class="btn" id="exp-cancel" type="button">Cancel</button>' +
+          '<button class="btn primary" id="exp-ok" type="button">Export</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(m);
+    var nameInput = m.querySelector("#exp-name");
+    var include = m.querySelector("#exp-floorplan");
+    var ok = m.querySelector("#exp-ok");
+    nameInput.value = defaultName;
+    nameInput.focus(); nameInput.select();
+    m.querySelector("#exp-cancel").addEventListener("click", function(){ closeModal(m); });
+    m.addEventListener("click", function(e){ if(e.target === m) closeModal(m); });
+    async function doExport(){
+      var base = cleanFilename(nameInput.value, defaultName);
+      ok.disabled = true;
+      try{
+        var jsonBlob = textBlob(JSON.stringify(serialize(false), null, 2), "application/json");
+        if(!include.checked){
+          NUHS.downloadBlob(jsonBlob, base + ".json");
+          NUHS.toast("Plan exported");
+          closeModal(m);
+          return;
+        }
+        if(!state.map || !img) throw new Error("Load a floorplan first");
+        var floorName = webpNameFromImageName(state.map.name);
+        if(floorName.toLowerCase() === "annotated plan.webp") floorName = "floorplan.webp";
+        var zipBlob = await createZip([
+          { name:base + ".json", blob:jsonBlob },
+          { name:floorName, blob:await floorplanWebpBlob() },
+          { name:"annotated plan.webp", blob:await annotatedPlanWebpBlob() }
+        ]);
+        NUHS.downloadBlob(zipBlob, base + ".zip");
+        NUHS.toast("Plan ZIP exported");
+        closeModal(m);
+      }catch(err){
+        ok.disabled = false;
+        NUHS.toast("Export failed: " + err.message, true);
+      }
+    }
+    ok.addEventListener("click", doExport);
+    nameInput.addEventListener("keydown", function(e){
+      if(e.key === "Enter"){ e.preventDefault(); doExport(); }
+    });
+  }
+
+  function loadScript(src){
+    return new Promise(function(resolve, reject){
+      var timer = setTimeout(function(){
+        reject(new Error("Timed out loading Firebase SDK"));
+      }, 8000);
+      var existing = document.querySelector('script[src="' + src + '"]');
+      if(existing){
+        if(existing.dataset.failed === "1"){ existing.remove(); }
+        else {
+          existing.addEventListener("load", function(){ clearTimeout(timer); resolve(); }, { once:true });
+          existing.addEventListener("error", function(){ clearTimeout(timer); reject(new Error("Couldn't load Firebase SDK")); }, { once:true });
+          if(existing.dataset.loaded === "1"){ clearTimeout(timer); resolve(); }
+          return;
+        }
+      }
+      var script = document.createElement("script");
+      script.src = src;
+      script.onload = function(){ clearTimeout(timer); script.dataset.loaded = "1"; resolve(); };
+      script.onerror = function(){
+        clearTimeout(timer);
+        script.dataset.failed = "1";
+        script.remove();
+        reject(new Error("Firestore is only available after Firebase is configured"));
+      };
+      document.head.appendChild(script);
+    });
+  }
+  async function getFirestore(){
+    if(window.firebase && firebase.apps && firebase.apps.length && firebase.firestore) return firebase.firestore();
+    if(!firestorePromise){
+      firestorePromise = (async function(){
+        await loadScript("/__/firebase/" + FIREBASE_SDK_VERSION + "/firebase-app.js");
+        await loadScript("/__/firebase/" + FIREBASE_SDK_VERSION + "/firebase-firestore.js");
+        await loadScript("/__/firebase/init.js");
+        if(!window.firebase || !firebase.apps || !firebase.apps.length || !firebase.firestore){
+          throw new Error("Firebase Hosting config was not found");
+        }
+        return firebase.firestore();
+      })().catch(function(err){
+        firestorePromise = null;
+        throw err;
+      });
+    }
+    return firestorePromise;
+  }
+  function withTimeout(promise, ms, message){
+    return new Promise(function(resolve, reject){
+      var done = false;
+      var timer = setTimeout(function(){
+        if(done) return;
+        done = true;
+        reject(new Error(message));
+      }, ms);
+      promise.then(function(value){
+        if(done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(value);
+      }).catch(function(err){
+        if(done) return;
+        done = true;
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+  }
+  function firestoreMessage(err){
+    var code = err && err.code ? String(err.code) : "";
+    var msg = err && err.message ? err.message : String(err || "Unknown error");
+    if(code === "permission-denied") return "Firestore permission denied. Enable Firestore and update security rules for planFiles.";
+    if(code === "unavailable") return "Firestore is unavailable. Check network access and Firebase project status.";
+    return msg;
+  }
+  function fileModifiedLabel(value){
+    if(!value) return "";
+    if(value.toDate) value = value.toDate();
+    var d = value instanceof Date ? value : new Date(value);
+    return isNaN(d.getTime()) ? "" : d.toLocaleString();
+  }
+  function showNotesModal(filename, notes){
+    var m = document.createElement("div");
+    m.className = "modal notes-modal";
+    m.innerHTML =
+      '<div class="box" role="dialog" aria-modal="true" aria-label="File notes">' +
+        '<button class="btn close" type="button" aria-label="Close">&times;</button>' +
+        '<h2></h2>' +
+        '<p class="notebody"></p>' +
+      '</div>';
+    m.querySelector("h2").textContent = filename || "Notes";
+    m.querySelector(".notebody").textContent = String(notes || "").trim() || "No notes";
+    function close(){ m.remove(); document.removeEventListener("keydown", onKey); }
+    function onKey(e){ if(e.key === "Escape") close(); }
+    m.querySelector(".close").addEventListener("click", close);
+    m.addEventListener("click", function(e){ if(e.target === m) close(); });
+    document.addEventListener("keydown", onKey);
+    document.body.appendChild(m);
+    m.querySelector(".close").focus();
+  }
+  function renderFileRows(rows, message){
+    var body = $("#filemanager-rows");
+    body.innerHTML = "";
+    if(message){
+      body.innerHTML = '<tr><td class="emptycell" colspan="6">' + escapeHtml(message) + '</td></tr>';
+      return;
+    }
+    if(!rows.length){
+      body.innerHTML = '<tr><td class="emptycell" colspan="6">No authored floor plans saved yet.</td></tr>';
+      return;
+    }
+    rows.forEach(function(row){
+      var tr = document.createElement("tr");
+      tr.innerHTML =
+        '<td><b>' + escapeHtml(row.filename || "Untitled") + '</b></td>' +
+        '<td>' + escapeHtml(row.department || "") + '</td>' +
+        '<td>' + escapeHtml(row.observedBy || "") + '</td>' +
+        '<td class="mono">' + escapeHtml(row.date || "") + '</td>' +
+        '<td class="mono">' + escapeHtml(fileModifiedLabel(row.lastModified)) + '</td>' +
+        '<td class="actions">' +
+          '<button class="btn iconbtn" data-info type="button" title="Notes" aria-label="Notes">i</button>' +
+          '<button class="btn" data-load type="button">Load</button>' +
+          '<button class="btn danger" data-delete type="button">Delete</button>' +
+        '</td>';
+      tr.querySelector("[data-info]").addEventListener("click", function(){ showNotesModal(row.filename, row.notes); });
+      tr.querySelector("[data-load]").addEventListener("click", function(){ loadFirestorePlan(row.id); });
+      tr.querySelector("[data-delete]").addEventListener("click", function(){ deleteFirestorePlan(row.id, row.filename); });
+      body.appendChild(tr);
+    });
+  }
+  async function refreshFileManager(){
+    renderFileRows([], "Loading files...");
+    try{
+      var db = await withTimeout(getFirestore(), 10000, "Timed out connecting to Firestore");
+      var snap = await withTimeout(db.collection(FIRESTORE_COLLECTION).get(), 10000, "Timed out loading files from Firestore");
+      var rows = [];
+      snap.forEach(function(doc){
+        var d = doc.data() || {};
+        rows.push({
+          id:doc.id,
+          filename:d.filename,
+          department:d.department,
+          observedBy:d.observedBy,
+          date:d.date,
+          lastModified:d.lastModified,
+          notes:d.notes
+        });
+      });
+      rows.sort(function(a,b){
+        return String(b.lastModified || "").localeCompare(String(a.lastModified || ""));
+      });
+      renderFileRows(rows);
+    }catch(err){
+      renderFileRows([], "File Manager unavailable: " + firestoreMessage(err));
+    }
+  }
+  async function findPlanFileByFilename(db, filename){
+    var snap = await withTimeout(
+      db.collection(FIRESTORE_COLLECTION).where("filename", "==", filename).get(),
+      10000,
+      "Timed out checking existing file in Firestore"
+    );
+    var best = null;
+    snap.forEach(function(doc){
+      var data = doc.data() || {};
+      var modified = String(data.lastModified || "");
+      if(!best || modified > best.lastModified){
+        best = { id:doc.id, lastModified:modified };
+      }
+    });
+    return best;
+  }
+  function showPlanWorkspace(){
+    $("#filemanager").hidden = true;
+    $("#stagepanel").hidden = false;
+    resize();
+    requestRender();
+  }
+  function showFileManager(){
+    cancelDraft();
+    hideDrawbar();
+    $("#stagepanel").hidden = true;
+    $("#filemanager").hidden = false;
+    refreshFileManager();
+  }
+  async function savePlanToFirestore(payload){
+    try{
+      var db = await withTimeout(getFirestore(), 10000, "Timed out connecting to Firestore");
+      var settings = payload.settings || NUHS.loadSettings();
+      var filename = settingsFilename(settings);
+      settings.filename = filename;
+      payload.settings = settings;
+      var record = {
+        filename:filename,
+        department:settings.department || "",
+        observedBy:settings.observedBy || "",
+        date:settings.date || "",
+        notes:settings.notes || "",
+        lastModified:new Date().toISOString(),
+        plan:payload
+      };
+      var targetId = null;
+      if(currentFileRef.id && currentFileRef.filename === filename){
+        targetId = currentFileRef.id;
+      } else {
+        var existing = await findPlanFileByFilename(db, filename);
+        if(existing) targetId = existing.id;
+      }
+      if(targetId){
+        await withTimeout(db.collection(FIRESTORE_COLLECTION).doc(targetId).set(record, { merge:true }), 10000, "Timed out saving to Firestore");
+        currentFileRef = { id:targetId, filename:filename };
+        persistCurrentFileRef();
+      } else {
+        var doc = await withTimeout(db.collection(FIRESTORE_COLLECTION).add(record), 10000, "Timed out saving to Firestore");
+        currentFileRef = { id:doc.id, filename:filename };
+        persistCurrentFileRef();
+      }
+      NUHS.toast("Saved to File Manager");
+      if(!$("#filemanager").hidden) refreshFileManager();
+    }catch(err){
+      NUHS.toast("Firestore save failed: " + firestoreMessage(err), true);
+    }
+  }
+  async function loadFirestorePlan(id){
+    try{
+      var db = await withTimeout(getFirestore(), 10000, "Timed out connecting to Firestore");
+      var doc = await withTimeout(db.collection(FIRESTORE_COLLECTION).doc(id).get(), 10000, "Timed out loading from Firestore");
+      if(!doc.exists) throw new Error("File not found");
+      var data = doc.data() || {};
+      if(!data.plan) throw new Error("Saved file has no plan data");
+      applyPlanSettings(data.plan, data.filename);
+      deserialize(data.plan);
+      currentFileRef = { id:id, filename:settingsFilename(NUHS.loadSettings()) };
+      persistCurrentFileRef();
+      showPlanWorkspace();
+      $("#coach").hidden = true;
+      persist(); refreshRail(); syncScaleReadout(); syncLayerBoxes(); requestRender();
+      NUHS.toast("Loaded " + currentFileRef.filename);
+    }catch(err){
+      NUHS.toast("Load failed: " + firestoreMessage(err), true);
+    }
+  }
+  async function deleteFirestorePlan(id, filename){
+    var ok = await NUHS.confirm({
+      title:"Delete file?",
+      body:"Delete " + (filename || "this floor plan") + " from File Manager.",
+      confirmLabel:"Delete",
+      cancelLabel:"Keep",
+      danger:true
+    });
+    if(!ok) return;
+    try{
+      var db = await withTimeout(getFirestore(), 10000, "Timed out connecting to Firestore");
+      await withTimeout(db.collection(FIRESTORE_COLLECTION).doc(id).delete(), 10000, "Timed out deleting from Firestore");
+      if(currentFileRef.id === id) clearCurrentFileRef();
+      NUHS.toast("File deleted");
+      refreshFileManager();
+    }catch(err){
+      NUHS.toast("Delete failed: " + firestoreMessage(err), true);
+    }
   }
 
   /* ---------- top bar wiring ---------- */
@@ -2146,40 +3234,44 @@
         confirmLabel:"Got it", cancelLabel:"Close"
       });
     },
-    onImport:function(){ $("#importInput").click(); },
-    onExport:function(){
-      var s = NUHS.loadSettings();
-      var blob = new Blob([JSON.stringify(serialize(true),null,2)], { type:"application/json" });
-      NUHS.downloadBlob(blob, NUHS.slug(s.department, "ed-flow") + "-plan.json");
-      NUHS.toast("Plan exported");
-    },
-    onPng:exportPng,
+    onImport:openImportDialog,
+    onExport:openExportDialog,
+    showPng:false,
     onSave:function(){ save(true); }
   });
 
-  $("#importInput").addEventListener("change", function(e){
+  $("#importInput").addEventListener("change", async function(e){
     var f = e.target.files[0];
     if(!f) return;
-    var reader = new FileReader();
-    reader.onload = function(){
-      try{
-        var d = JSON.parse(reader.result);
-        if(d.kind && d.kind !== "ed-flow-plan" && d.kind !== "ed-flow-annotation")
-          throw new Error("not a plan file");
-        deserialize(d);
-        $("#coach").hidden = true;
-        persist(); refreshRail(); syncScaleReadout(); syncLayerBoxes(); requestRender();
-        if(d.kind !== "ed-flow-annotation") NUHS.toast("Plan imported");
-      }catch(err){
-        NUHS.toast("Import failed: " + err.message, true);
-      }
-    };
-    reader.readAsText(f);
-    e.target.value = "";
+    try{
+      var d = await importPlanFile(f);
+      applyPlanSettings(d);
+      deserialize(d);
+      clearCurrentFileRef();
+      $("#coach").hidden = true;
+      persist(); refreshRail(); syncScaleReadout(); syncLayerBoxes(); requestRender();
+      if(d.kind !== "ed-flow-annotation") NUHS.toast("Plan imported");
+      closeModal(activeImportModal);
+      activeImportModal = null;
+    }catch(err){
+      NUHS.toast("Import failed: " + err.message, true);
+    }finally{
+      e.target.value = "";
+    }
   });
 
   /* ---------- boot ---------- */
+  function preloadRoleIcons(){
+    state.roles.forEach(function(role){
+      var im = new Image();
+      im.onload = requestRender;
+      im.src = role.icon;
+      roleIconImages[role.id] = im;
+    });
+  }
   function boot(){
+    preloadRoleIcons();
+    restoreCurrentFileRef();
     setMode("zones");
     resize();
     var restored = false;

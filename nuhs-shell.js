@@ -1,7 +1,7 @@
 /* ==========================================================================
    NUHS ED Command Center — shared shell.
    Renders the top command bar, owns SETTINGS, and brokers IMPORT / EXPORT /
-   PNG / SAVE out to whichever page mounted it. PLAN and SIMULATE are separate
+   optional PNG / SAVE out to whichever page mounted it. PLAN and SIMULATE are separate
    documents, so cross-tab state travels through localStorage.
    ========================================================================== */
 (function(global){
@@ -10,6 +10,7 @@
   var SETTINGS_KEY = "nuhs-ed-settings-v1";
 
   var DEFAULT_SETTINGS = {
+    filename: "Emergency_Department-plan",
     department: "Emergency Department",
     observedBy: "",
     date: new Date().toISOString().slice(0,10),
@@ -62,10 +63,17 @@
     s = (s || "").replace(/[^\w-]+/g, "_").replace(/^_+|_+$/g, "");
     return s || fallback;
   }
+  function cleanFilename(s, fallback){
+    s = (s || "").replace(/\.(json|zip|png|jpe?g|webp)$/i, "")
+      .replace(/[\\/:*?"<>|]+/g, "_")
+      .replace(/^\.+|\.+$/g, "")
+      .trim();
+    return s || fallback || "ed-flow-plan";
+  }
 
   /* ---------- top bar ---------- */
   /* opts: { active:"plan"|"simulate", onImport, onExport, onPng, onSave,
-             onHelp, pngEnabled:Boolean } */
+             onHelp, pngEnabled:Boolean, showPng:Boolean } */
   function mountTopBar(opts){
     opts = opts || {};
     var bar = el("header", "topbar");
@@ -95,8 +103,11 @@
     act("?", "help", opts.onHelp || null, "Help and shortcuts");
     act("Import", null, opts.onImport || null);
     act("Export", null, opts.onExport || null);
-    var pngBtn = act("PNG", null, opts.onPng || null);
-    if(opts.pngEnabled === false) pngBtn.disabled = true;
+    var pngBtn = null;
+    if(opts.showPng !== false){
+      pngBtn = act("PNG", null, opts.onPng || null);
+      if(opts.pngEnabled === false) pngBtn.disabled = true;
+    }
     act("Settings", null, openSettings);
     act("Save", "save", opts.onSave || null);
     bar.appendChild(acts);
@@ -115,6 +126,8 @@
     m.innerHTML =
       '<div class="box" role="dialog" aria-modal="true" aria-label="Settings">' +
         '<h2>Settings</h2>' +
+        '<label class="field"><span>Filename</span>' +
+          '<input type="text" id="set-filename"></label>' +
         '<label class="field"><span>Department</span>' +
           '<input type="text" id="set-dept"></label>' +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
@@ -125,6 +138,8 @@
         '</div>' +
         '<label class="field" style="margin-bottom:0"><span>Notes</span>' +
           '<textarea id="set-notes" placeholder="Planning assumptions, observed constraints, route collection notes."></textarea></label>' +
+        '<p style="color:var(--text-dim);font-size:12.5px;line-height:1.5;margin:14px 0 0">' +
+          'Changing filename will count as a new file when Saved. Saving settings does not automatically save, please click the Save button.</p>' +
         '<div class="row">' +
           '<button class="btn" id="set-cancel" type="button">Cancel</button>' +
           '<button class="btn primary" id="set-save" type="button">Save Settings</button>' +
@@ -136,6 +151,7 @@
     m.querySelector("#set-cancel").addEventListener("click", closeSettings);
     m.querySelector("#set-save").addEventListener("click", function(){
       var s = {
+        filename:   cleanFilename(m.querySelector("#set-filename").value, "ed-flow-plan"),
         department: m.querySelector("#set-dept").value.trim(),
         observedBy: m.querySelector("#set-obs").value.trim(),
         date:       m.querySelector("#set-date").value,
@@ -155,12 +171,13 @@
   function openSettings(){
     if(!settingsModal) settingsModal = buildSettingsModal();
     var s = loadSettings();
+    settingsModal.querySelector("#set-filename").value = s.filename;
     settingsModal.querySelector("#set-dept").value  = s.department;
     settingsModal.querySelector("#set-obs").value   = s.observedBy;
     settingsModal.querySelector("#set-date").value  = s.date;
     settingsModal.querySelector("#set-notes").value = s.notes;
     settingsModal.hidden = false;
-    settingsModal.querySelector("#set-dept").focus();
+    settingsModal.querySelector("#set-filename").focus();
   }
   function closeSettings(){ if(settingsModal) settingsModal.hidden = true; }
 
